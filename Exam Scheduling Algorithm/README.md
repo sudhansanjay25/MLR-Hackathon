@@ -75,21 +75,24 @@ Follow the prompts to:
 - Group by department
 - Sort by subject type (HEAVY first)
 
-### Phase 3: Conflict Detection
-- Build conflict graph
-- Subjects from same department = CONFLICT
-- Different departments = NO CONFLICT
+### Phase 3: Date-Based Conflict Prevention
+- **Critical Rule**: Maximum one exam per department per day
+- Uses `dept_date_usage` dictionary to track department usage by date
+- Prevents scheduling conflicts within departments
+- Different departments can have exams on same day
 
 ### Phase 4: Greedy Scheduling
-- Assign subjects to earliest available slots
-- Validate gap constraints
+- Assign subjects to earliest available dates
+- Validate gap constraints (semester exams only)
+- Respect one-exam-per-department-per-day rule
 - If constraint violated but slot available, assign anyway and log violation
-- If no slots available, report error
+- If no slots available, report error and suggest extending date range
 
 ### Phase 5: Output Generation
-- Save schedule to database
-- Log violations
-- Display formatted timetable
+- Save schedule to database with cycle tracking
+- Log constraint violations with details
+- Display formatted timetable in console
+- Auto-generate PDF in appropriate format (portrait/landscape)
 
 ## Mock Data
 
@@ -110,14 +113,30 @@ The system generates schedules in two formats:
 Formatted text table displayed in terminal during execution
 
 ### 2. PDF Document (Automatic)
-- Professional formatted timetable with:
-  - Title and metadata
-  - Schedule summary
-  - Complete timetable with dates, sessions, subjects
-  - Constraint violations (if any)
-  - Department-wise summary
+Professional formatted timetable with institutional format:
+
+#### Semester Exams:
+- **Portrait A4 orientation**
+- Department-wise tables with separate sections
+- Columns: Date, Session, Subject Code, Subject Name
+- White background with black text and borders
+- Tables kept together on pages when possible
+
+#### Internal Exams:
+- **Landscape A4 orientation**
+- Matrix format (Departments × Dates) on single page
+- Departments in rows, dates in columns
+- No subject codes displayed
+- Date headers include day name (e.g., "02.12.2025\nTuesday")
+- Automatic word wrapping for long subject names
+- Complete words move to next line (no character splitting)
+- White background with black text and borders
+
+**Features:**
+- Institutional header with college details
+- Clean, professional design
+- Constraint violations summary (if any)
 - Generated using ReportLab library
-- Landscape A4 format for better readability
 - Filename format: `exam_schedule_[type]_year[X]_[timestamp].pdf`
 
 ## Sample Output
@@ -128,7 +147,7 @@ Formatted text table displayed in terminal during execution
 ======================================================================
 
    Total Exams Scheduled: 19
-   Constraint Violations: 13
+   Constraint Violations: 10
 
 ----------------------------------------------------------------------
 Date            Session    Dept     Code       Subject                  
@@ -136,16 +155,53 @@ Date            Session    Dept     Code       Subject
 16.12.2025      FN         CSE      CS306      Software Engineering         
 16.12.2025      FN         ECE      EC305      Communication Systems     
 16.12.2025      FN         MECH     ME305      Material Science          
+17.12.2025      FN         CSE      CS307      Web Technologies
 ----------------------------------------------------------------------
 
-   ✅ PDF generated: exam_schedule_semester_year2_20251211_143052.pdf
+📄 Generating PDF...
+   ✅ PDF saved: exam_schedule_semester_year2_20251211_143052.pdf
 ```
+
+## Testing
+
+Run the automated test suite:
+```bash
+python test_demo.py
+```
+
+Tests include:
+- ✅ Semester exam scheduling with gap constraints
+- ✅ Internal exam scheduling 
+- ✅ Edge case handling (insufficient dates)
+- ✅ PDF generation for both formats
+- ✅ Violation detection and reporting
+
+## Key Features Implemented
+
+### ✅ Conflict-Free Scheduling
+- One exam per department per day (enforced)
+- No overlapping exams for same department students
+
+### ✅ Dual PDF Formats
+- Portrait tables for semester exams
+- Landscape matrix for internal exams
+
+### ✅ Smart Text Handling
+- Automatic word wrapping in table cells
+- Complete words stay together (no character splitting)
+- Date and day displayed in same cell
+
+### ✅ Professional Output
+- Institutional header formatting
+- Clean white background design
+- Constraint violation reporting
 
 ## Future Enhancements
 
-- Web interface integration with Flask
-- PDF/Excel export of schedules
+- Web interface with Flask/Django
 - Room allocation based on capacity
 - Invigilator duty assignment
-- Student hall ticket integration
+- Student hall ticket generation
+- Email notifications
+- Calendar export (iCal format)
 - Multi-department common subjects handling
