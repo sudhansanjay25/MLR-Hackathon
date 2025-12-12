@@ -10,9 +10,7 @@ This system allocates students to exam halls with the following features:
 
 import pandas as pd
 import numpy as np
-from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from openpyxl.utils import get_column_letter
+import random
 import os
 from datetime import datetime
 import matplotlib.pyplot as plt
@@ -27,7 +25,7 @@ from reportlab.lib.enums import TA_CENTER, TA_LEFT
 
 
 class SeatingAllocationSystem:
-    def __init__(self, halls_file, students_file, teachers_file, session='FN'):
+    def __init__(self, halls_file, students_file, teachers_file, session='FN', exam_type='Internal', year=1):
         """Initialize the seating allocation system"""
         # Read halls data with columns information
         self.halls_df = pd.read_csv(halls_file)
@@ -46,31 +44,88 @@ class SeatingAllocationSystem:
         self.hall_wise_allocations = {}
         self.teacher_assignments = {}
         self.session = session  # 'FN' or 'AN'
+        self.exam_type = exam_type  # 'Internal' or 'SEM'
+        self.year = year  # Academic year (1, 2, 3, or 4)
         self.generation_date = datetime.now().strftime('%Y-%m-%d')
         
     def allocate_seats_mixed_department(self):
         """
-        Allocate seats linearly by department
-        Complete one department before moving to the next
+        Allocate seats based on exam type:
+        - SEM: Linear allocation by department, 1 student per bench
+        - Internal: Alternating departments, 2 students per bench from different departments
         """
         print("=" * 60)
-        print("SEATING ALLOCATION - LINEAR DEPARTMENT FORMAT")
+        print(f"SEATING ALLOCATION - {self.exam_type.upper()} EXAM FORMAT")
         print("=" * 60)
         
-        # Sort students by department and register number
-        students_sorted = self.students_df.sort_values(
-            ['Department', 'Register Number']
-        ).reset_index(drop=True)
+        if self.exam_type == 'SEM':
+            # Semester exam: Linear allocation, 1 student per bench
+            allocations = self._allocate_sem_linear()
+        else:
+            # Internal exam: Alternating departments, 2 students per bench
+            allocations = self._allocate_internal_alternating()
         
-        # Allocate students to halls
-        current_hall_idx = 0
-        current_seat_in_hall = 1
+        self.allocations = pd.DataFrame(allocations)
+        print(f"\nTotal students allocated: {len(self.allocations)}")
+        
+        # Create hall-wise summary
+        self._create_hall_wise_summary()
+        
+        return self.allocations
+    
+    def _allocate_sem_linear(self):
+        """Allocate for SEM exam: 1 student per bench with randomization and min 2 depts per hall"""
+        # Group students by department and shuffle within each department
+        departments = sorted(self.students_df['Department'].unique())
+        dept_groups = {}
+        
+        for dept in departments:
+            dept_students = self.students_df[self.students_df['Department'] == dept].copy()
+            dept_students = dept_students.sort_values('Register Number').reset_index(drop=True)
+            # Shuffle to add randomness
+            dept_students = dept_students.sample(frac=1, random_state=42).reset_index(drop=True)
+            dept_groups[dept] = dept_students
+        
+        # Create pointers for each department
+        dept_pointers = {dept: 0 for dept in departments}
         
         allocations = []
+        current_hall_idx = 0
+        current_seat_in_hall = 1
+        total_students = len(self.students_df)
+        total_allocated = 0
         
-        for idx, student in students_sorted.iterrows():
+        # Track departments used in current hall
+        current_hall_depts = set()
+        hall_start_idx = 0
+        
+        while total_allocated < total_students:
             hall_no = self.halls_df.loc[current_hall_idx, 'hallno']
             hall_capacity = self.halls_df.loc[current_hall_idx, 'capacity']
+            
+            # Find available departments (prioritize ensuring min 2 depts per hall)
+            available_depts = [dept for dept, ptr in dept_pointers.items() 
+                             if ptr < len(dept_groups[dept])]
+            
+            if len(available_depts) == 0:
+                break
+            
+            # Select department with controlled randomness
+            # Ensure at least 2 different departments per hall
+            if len(current_hall_depts) < 2:
+                # Prefer departments not yet in this hall
+                unused_depts = [d for d in available_depts if d not in current_hall_depts]
+                if unused_depts:
+                    selected_dept = random.choice(unused_depts)
+                else:
+                    selected_dept = random.choice(available_depts)
+            else:
+                # Random selection from all available
+                selected_dept = random.choice(available_depts)
+            
+            current_hall_depts.add(selected_dept)
+            
+            student = dept_groups[selected_dept].iloc[dept_pointers[selected_dept]]
             
             allocations.append({
                 'Hall No': hall_no,
@@ -80,25 +135,130 @@ class SeatingAllocationSystem:
                 'Department': student['Department']
             })
             
+            dept_pointers[selected_dept] += 1
+            total_allocated += 1
             current_seat_in_hall += 1
             
-            # Check if we need to move to next hall
+            # Move to next hall if current is full
             if current_seat_in_hall > hall_capacity:
+                print(f"  Hall {hall_no}: {len(current_hall_depts)} departments - {current_hall_depts}")
                 current_hall_idx += 1
                 current_seat_in_hall = 1
+                current_hall_depts = set()
+                hall_start_idx = len(allocations)
                 
                 if current_hall_idx >= len(self.halls_df):
                     print("Warning: Ran out of halls!")
                     break
         
-        self.allocations = pd.DataFrame(allocations)
-        print(f"\nTotal students allocated: {len(self.allocations)}")
+        # Print final hall info if not empty
+        if current_hall_depts:
+            print(f"  Hall {hall_no}: {len(current_hall_depts)} departments - {current_hall_depts}")
+        
         print(f"Halls used: {current_hall_idx + 1} out of {len(self.halls_df)}")
+        return allocations
+    
+    def _allocate_internal_alternating(self):
+        """Allocate for Internal exam: 2 students per bench with randomization and min 2 depts per hall"""
+        # Group students by department and shuffle
+        departments = sorted(self.students_df['Department'].unique())
+        dept_groups = {}
         
-        # Create hall-wise summary
-        self._create_hall_wise_summary()
+        for dept in departments:
+            dept_students = self.students_df[self.students_df['Department'] == dept].copy()
+            dept_students = dept_students.sort_values('Register Number').reset_index(drop=True)
+            # Shuffle for randomness
+            dept_students = dept_students.sample(frac=1, random_state=42).reset_index(drop=True)
+            dept_groups[dept] = dept_students
         
-        return self.allocations
+        # Create pointers for each department
+        dept_pointers = {dept: 0 for dept in departments}
+        
+        allocations = []
+        current_hall_idx = 0
+        current_seat_in_hall = 1
+        total_students = len(self.students_df)
+        total_allocated = 0
+        
+        # Track departments in current hall
+        current_hall_depts = set()
+        
+        # For Internal exams, capacity represents benches
+        while total_allocated < total_students:
+            hall_no = self.halls_df.loc[current_hall_idx, 'hallno']
+            hall_capacity = self.halls_df.loc[current_hall_idx, 'capacity']
+            
+            # Find available departments
+            available_depts = [dept for dept, ptr in dept_pointers.items() 
+                             if ptr < len(dept_groups[dept])]
+            
+            if len(available_depts) == 0:
+                break
+            
+            # Select first student (ensure dept diversity in hall)
+            if len(current_hall_depts) < 2:
+                unused_depts = [d for d in available_depts if d not in current_hall_depts]
+                dept1 = random.choice(unused_depts) if unused_depts else random.choice(available_depts)
+            else:
+                dept1 = random.choice(available_depts)
+            
+            current_hall_depts.add(dept1)
+            student1 = dept_groups[dept1].iloc[dept_pointers[dept1]]
+            
+            allocations.append({
+                'Hall No': hall_no,
+                'Seat No': current_seat_in_hall,
+                'Register Number': student1['Register Number'],
+                'Name': student1['Name'],
+                'Department': student1['Department']
+            })
+            
+            dept_pointers[dept1] += 1
+            total_allocated += 1
+            
+            # Try to allocate second student from different department (bench-mate)
+            available_depts = [dept for dept, ptr in dept_pointers.items() 
+                             if ptr < len(dept_groups[dept])]
+            
+            if len(available_depts) > 0:
+                # Prefer different department for bench-mate
+                other_depts = [d for d in available_depts if d != dept1]
+                if other_depts:
+                    dept2 = random.choice(other_depts)
+                    current_hall_depts.add(dept2)
+                    student2 = dept_groups[dept2].iloc[dept_pointers[dept2]]
+                    
+                    allocations.append({
+                        'Hall No': hall_no,
+                        'Seat No': current_seat_in_hall,  # Same seat for bench-mates
+                        'Register Number': student2['Register Number'],
+                        'Name': student2['Name'],
+                        'Department': student2['Department']
+                    })
+                    
+                    dept_pointers[dept2] += 1
+                    total_allocated += 1
+            
+            current_seat_in_hall += 1
+            
+            # Move to next hall if current is full
+            if current_seat_in_hall > hall_capacity:
+                print(f"  Hall {hall_no}: {len(current_hall_depts)} departments - {current_hall_depts}")
+                current_hall_idx += 1
+                current_seat_in_hall = 1
+                current_hall_depts = set()
+                
+                if current_hall_idx >= len(self.halls_df):
+                    print("Warning: Ran out of halls!")
+                    break
+        
+        # Print final hall info
+        if current_hall_depts:
+            print(f"  Hall {hall_no}: {len(current_hall_depts)} departments - {current_hall_depts}")
+        
+        print(f"Halls used: {current_hall_idx + 1} out of {len(self.halls_df)}")
+        print(f"Benches per hall: ~{hall_capacity}, Total capacity: ~{hall_capacity * 2} students")
+        return allocations
     
     def allocate_seats_alternating_department(self):
         """
@@ -255,22 +415,57 @@ class SeatingAllocationSystem:
         hall_data = self.hall_wise_allocations[hall_no]
         hall_capacity = self.halls_df[self.halls_df['hallno'] == hall_no]['capacity'].values[0]
         
-        # Calculate number of rows needed
-        num_rows = int(np.ceil(hall_capacity / num_cols))
+        if self.exam_type == 'SEM':
+            # Semester Exam: 1 student per bench
+            students = hall_data['Register Number'].tolist()
+            num_rows = int(np.ceil(hall_capacity / num_cols))
+            
+            layout = []
+            for row in range(num_rows):
+                row_data = []
+                for col in range(num_cols):
+                    idx = row * num_cols + col
+                    if idx < len(students):
+                        row_data.append(students[idx])
+                    else:
+                        row_data.append("-")  # Empty seats shown as dash
+                layout.append(row_data)
         
-        # Create 2D grid
-        layout = []
-        students = hall_data['Register Number'].tolist()
-        
-        for row in range(num_rows):
-            row_data = []
-            for col in range(num_cols):
-                idx = row * num_cols + col
-                if idx < len(students):
-                    row_data.append(students[idx])
-                else:
-                    row_data.append("EMPTY")
-            layout.append(row_data)
+        else:  # Internal Exam
+            # Internal Exam: 2 students per bench from different departments
+            # Group by seat number to get bench-mates
+            num_rows = int(np.ceil(hall_capacity / num_cols))
+            
+            layout = []
+            bench_idx = 0
+            
+            for row in range(num_rows):
+                row_data = []
+                for col in range(num_cols):
+                    bench_idx += 1
+                    # Get students for this bench (same seat number)
+                    bench_students = hall_data[hall_data['Seat No'] == bench_idx]
+                    
+                    if len(bench_students) == 0:
+                        row_data.append({"left": "-", "right": "-"})
+                    elif len(bench_students) == 1:
+                        student = bench_students.iloc[0]
+                        row_data.append({
+                            "left": student['Register Number'],
+                            "right": "-",  # Empty seat shown as dash
+                            "dept_left": student['Department']
+                        })
+                    else:  # 2 students
+                        student1 = bench_students.iloc[0]
+                        student2 = bench_students.iloc[1]
+                        row_data.append({
+                            "left": student1['Register Number'],
+                            "right": student2['Register Number'],
+                            "dept_left": student1['Department'],
+                            "dept_right": student2['Department']
+                        })
+                    
+                layout.append(row_data)
         
         return layout, num_rows, num_cols
     
@@ -299,7 +494,10 @@ class SeatingAllocationSystem:
                 ha='center', fontsize=11)
         fig.text(0.5, 0.90, '[An Autonomous Institution]',
                 ha='center', fontsize=9, style='italic')
-        fig.text(0.5, 0.87, 'SEATING ARRANGEMENT',
+        
+        # Add exam type to title
+        exam_type_text = 'Continuous Internal Assessment - I' if self.exam_type == 'Internal' else 'End Semester Examination'
+        fig.text(0.5, 0.87, f'SEATING ARRANGEMENT ({exam_type_text})',
                 ha='center', fontsize=14, fontweight='bold')
         
         # Add date, session, and hall info
@@ -310,21 +508,42 @@ class SeatingAllocationSystem:
         fig.text(0.9, 0.82, f'Hall:{hall_no}', ha='right', fontsize=10)
         
         # Create column headers
-        col_headers = [str(i+1) for i in range(num_cols)]  # 1, 2, 3, 4, 5...
+        col_headers = [f'column {i+1}' for i in range(num_cols)]
         
-        # Prepare table data with row numbers
-        table_data = [col_headers]
-        for row_idx, row in enumerate(layout, 1):
-            table_data.append(row)
+        # Prepare table data based on exam type
+        if self.exam_type == 'SEM':
+            # Semester Exam: Simple grid with one student per cell
+            table_data = [col_headers]
+            for row_idx, row in enumerate(layout):
+                table_data.append(row)
+        else:
+            # Internal Exam: Vertical split cells (left | right)
+            table_data = [col_headers]
+            for row_idx, row in enumerate(layout):
+                row_data = []
+                for cell in row:
+                    if isinstance(cell, dict):
+                        # Format as "Left | Right" with vertical separator
+                        left = cell.get('left', 'EMPTY')
+                        right = cell.get('right', 'EMPTY')
+                        cell_text = f"{left} | {right}"
+                        row_data.append(cell_text)
+                    else:
+                        row_data.append(str(cell))
+                table_data.append(row_data)
         
         # Create main seating table
         table = ax.table(cellText=table_data, cellLoc='center', loc='center',
-                        bbox=[0.1, 0.25, 0.8, 0.52])
+                        bbox=[0.1, 0.20, 0.8, 0.57])
         
         # Style the table
         table.auto_set_font_size(False)
-        table.set_fontsize(9)
-        table.scale(1, 2)
+        if self.exam_type == 'Internal':
+            table.set_fontsize(6)  # Smaller font for two students per cell
+            table.scale(1, 2.0)  # Standard height for split cells
+        else:
+            table.set_fontsize(9)
+            table.scale(1, 2)
         
         # Style all cells with borders only (no colors)
         for key, cell in table.get_celld().items():
@@ -337,7 +556,8 @@ class SeatingAllocationSystem:
                 cell.set_text_props(weight='bold')
             
             # Style empty cells
-            if cell.get_text().get_text() == "EMPTY":
+            cell_text = cell.get_text().get_text()
+            if "EMPTY" in cell_text:
                 cell.set_text_props(color='lightgray', style='italic')
         
         # Add department breakdown table at bottom
@@ -368,16 +588,26 @@ class SeatingAllocationSystem:
             return fig
     
     def generate_student_pdf(self, output_file=None):
-        """Generate student PDF with hall layouts"""
+        """Generate student PDF with hall layouts (skip empty halls)"""
         if output_file is None:
-            output_file = f'seating_student_{self.generation_date}_{self.session}.pdf'
+            output_file = f'seating_student_{self.generation_date}_{self.session}_{self.exam_type}.pdf'
         
         print("\n" + "=" * 60)
         print("GENERATING STUDENT PDF")
         print("=" * 60)
         
+        # Filter out empty halls (halls with no students)
+        non_empty_halls = [hall_no for hall_no in sorted(self.hall_wise_allocations.keys())
+                          if len(self.hall_wise_allocations[hall_no]) > 0]
+        
+        if not non_empty_halls:
+            print("Warning: No halls with students to generate PDF!")
+            return None
+        
+        print(f"Generating PDF for {len(non_empty_halls)} halls with students...")
+        
         with PdfPages(output_file) as pdf:
-            for hall_no in sorted(self.hall_wise_allocations.keys()):
+            for hall_no in non_empty_halls:
                 print(f"  Creating layout for Hall {hall_no}...")
                 fig = self.generate_hall_visual(hall_no)
                 pdf.savefig(fig, bbox_inches='tight')
@@ -389,7 +619,7 @@ class SeatingAllocationSystem:
     def generate_faculty_pdf(self, output_file=None):
         """Generate faculty PDF with summary table"""
         if output_file is None:
-            output_file = f'seating_faculty_{self.generation_date}_{self.session}.pdf'
+            output_file = f'seating_faculty_{self.generation_date}_{self.session}_{self.exam_type}.pdf'
         
         print("\n" + "=" * 60)
         print("GENERATING FACULTY PDF")
@@ -478,19 +708,22 @@ class SeatingAllocationSystem:
         elements.append(summary_title)
         elements.append(Spacer(1, 0.2*inch))
         
-        # Prepare table data
-        table_data = [['Hall', 'Cap', 'Occ', 'Empty', 'Departments', 'Dept Count', 'Invigilator']]
+        # Prepare table data - only include non-empty halls and prevent text overflow
+        table_data = [['Hall', 'Cap', 'Occ', 'Invigilator', 'Departments']]
         
-        for hall_no in sorted(self.hall_wise_allocations.keys()):
+        # Filter to only non-empty halls
+        non_empty_halls = [hall_no for hall_no in sorted(self.hall_wise_allocations.keys())
+                          if len(self.hall_wise_allocations[hall_no]) > 0]
+        
+        for hall_no in non_empty_halls:
             hall_data = self.hall_wise_allocations[hall_no]
             capacity = self.halls_df[self.halls_df['hallno'] == hall_no]['capacity'].values[0]
             occupied = len(hall_data)
-            empty = capacity - occupied
             
-            # Get department counts
+            # Get department counts - use compact format
             dept_counts = hall_data['Department'].value_counts()
-            depts = ', '.join(dept_counts.index.tolist())
-            dept_breakdown = ', '.join([f"{dept}({count})" for dept, count in dept_counts.items()])
+            # Format as comma-separated to prevent overflow: "CSE:25,ECE:20,..."
+            dept_breakdown = ', '.join([f"{dept}:{count}" for dept, count in dept_counts.items()])
             
             teacher = self.teacher_assignments.get(hall_no, "TBA")
             
@@ -498,23 +731,24 @@ class SeatingAllocationSystem:
                 str(hall_no),
                 str(capacity),
                 str(occupied),
-                str(empty),
-                depts,
-                dept_breakdown,
-                teacher
+                teacher,
+                dept_breakdown
             ])
         
-        # Create table
-        col_widths = [0.5*inch, 0.6*inch, 0.6*inch, 0.6*inch, 1.2*inch, 1.5*inch, 1.2*inch]
+        # Create table with adjusted widths to prevent overflow
+        col_widths = [0.6*inch, 0.7*inch, 0.7*inch, 1.8*inch, 3.4*inch]  # Wider dept column
         summary_table = Table(table_data, colWidths=col_widths, repeatRows=1)
         
         summary_table.setStyle(TableStyle([
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 8),
-            ('FONTSIZE', (0, 1), (-1, -1), 7),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.black)
+            ('FONTSIZE', (0, 0), (-1, 0), 9),  # Slightly smaller header
+            ('FONTSIZE', (0, 1), (-1, -1), 7),  # Smaller data font
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+            ('TOPPADDING', (0, 1), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 1), (-1, -1), 4),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
+            ('WORDWRAP', (0, 0), (-1, -1), True),  # Enable word wrap
         ]))
         
         elements.append(summary_table)
@@ -667,35 +901,70 @@ def main():
     """Main execution function"""
     print("\n" + "=" * 60)
     print("SEATING ARRANGEMENT ALLOCATION SYSTEM")
-    print("First Year Students - Academic Year 2024-25")
+    print("Academic Year 2024-25")
     print("=" * 60)
     
     # File paths
     script_dir = os.path.dirname(os.path.abspath(__file__))
     halls_file = os.path.join(script_dir, 'halls.csv')
-    students_file = os.path.join(script_dir, 'year1.csv')
     teachers_file = os.path.join(script_dir, 'Teachers.csv')
     
+    # Get year selection from user
+    print("\nSelect Year:")
+    print("  1. First Year")
+    print("  2. Second Year")
+    print("  3. Third Year")
+    print("  4. Fourth Year")
+    year_input = input("\nEnter year (1/2/3/4) [default: 1]: ").strip()
+    
+    if year_input in ['1', '2', '3', '4']:
+        year = int(year_input)
+    else:
+        year = 1
+    
+    # Load appropriate student file based on year
+    students_file = os.path.join(script_dir, f'year{year}.csv')
+    
+    if not os.path.exists(students_file):
+        print(f"\nError: Student file '{students_file}' not found!")
+        print("Please ensure the file exists and try again.")
+        return
+    
+    year_names = {1: "First", 2: "Second", 3: "Third", 4: "Fourth"}
+    print(f"\n✓ Loaded {year_names[year]} Year students from {os.path.basename(students_file)}")
+    
+    # Get exam type from user
+    print("\nExam Types:")
+    print("  1. Internal - Continuous Internal Assessment (2 students per bench)")
+    print("  2. SEM - End Semester Examination (1 student per bench)")
+    exam_type_input = input("\nEnter exam type (Internal/SEM) [default: Internal]: ").strip().upper()
+    if exam_type_input not in ['INTERNAL', 'SEM']:
+        exam_type = 'Internal'
+    else:
+        exam_type = 'Internal' if exam_type_input == 'INTERNAL' else 'SEM'
+    
     # Get session from user (default to FN)
-    session = input("\nEnter session (FN/AN) [default: FN]: ").strip().upper()
+    session = input("Enter session (FN/AN) [default: FN]: ").strip().upper()
     if session not in ['FN', 'AN']:
         session = 'FN'
     
-    output_file = os.path.join(script_dir, 'first_year_seating_allocation.xlsx')
-    
     # Create allocation system
-    system = SeatingAllocationSystem(halls_file, students_file, teachers_file, session=session)
+    system = SeatingAllocationSystem(halls_file, students_file, teachers_file, 
+                                     session=session, exam_type=exam_type, year=year)
     
-    # Perform allocation (Linear Department Format - main allocation)
+    print(f"\nGenerating seating arrangement for Year {year} - {exam_type} Exam ({session} session)...")
+    if exam_type == 'Internal':
+        print("Mode: 2 students per bench (randomized, min 2 depts/hall)")
+    else:
+        print("Mode: 1 student per bench (randomized, min 2 depts/hall)")
+    
+    # Perform allocation with randomization
     allocations = system.allocate_seats_mixed_department()
     
     # Assign teachers to halls
     system.assign_teachers()
     
-    # Generate comprehensive Excel report
-    system.generate_excel_report(output_file)
-    
-    # Generate PDF reports
+    # Generate PDF reports only (no Excel)
     student_pdf = system.generate_student_pdf()
     faculty_pdf = system.generate_faculty_pdf()
     
@@ -705,18 +974,17 @@ def main():
     print("\n" + "=" * 60)
     print("ALLOCATION COMPLETE!")
     print("=" * 60)
+    print(f"\nYear: {year_names[year]} Year")
+    print(f"Exam Type: {exam_type}")
+    print(f"Session: {session}")
     print(f"\nGenerated Files:")
-    print(f"  1. Excel Report: {output_file}")
-    print(f"  2. Student PDF: {student_pdf}")
-    print(f"  3. Faculty PDF: {faculty_pdf}")
-    print("\nThe Excel file contains:")
-    print("  • Complete Allocation - Linear department format")
-    print("  • Hall Summary - Overview of each hall")
-    print("  • Department Summary - Department-wise statistics")
-    print("  • Individual Hall Sheets - Detailed view for each hall")
+    print(f"  1. Student PDF: {student_pdf}")
+    print(f"  2. Faculty PDF: {faculty_pdf}")
     print("\nPDF Files contain:")
-    print("  • Student PDF: Visual hall layouts (22 pages)")
-    print("  • Faculty PDF: Summary table with teacher assignments (1 page)")
+    print("  • Student PDF: Visual hall layouts (only non-empty halls)")
+    print("  • Faculty PDF: Summary table with teacher assignments")
+    print("  • Randomized seating with department diversity")
+    print("  • Minimum 2 departments per hall")
     print("\n")
 
 
