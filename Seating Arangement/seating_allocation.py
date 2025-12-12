@@ -27,18 +27,11 @@ from reportlab.lib.enums import TA_CENTER, TA_LEFT
 
 
 class SeatingAllocationSystem:
-    def __init__(self, halls_file, students_file, teachers_file, session='FN', exam_type='Internal'):
+    def __init__(self, halls_file, students_file, teachers_file, session='FN'):
         """Initialize the seating allocation system"""
         # Read halls data with columns information
         self.halls_df = pd.read_csv(halls_file)
         self.halls_df.columns = self.halls_df.columns.str.strip()
-        
-        # For Internal exams, capacity represents benches (2 students per bench)
-        # For SEM exams, capacity represents individual seats
-        if exam_type == 'Internal':
-            self.halls_df['effective_capacity'] = self.halls_df['capacity'] * 2
-        else:
-            self.halls_df['effective_capacity'] = self.halls_df['capacity']
         
         # Read students data - preserve register numbers as strings
         self.students_df = pd.read_csv(students_file, dtype={'Register Number': str})
@@ -53,26 +46,17 @@ class SeatingAllocationSystem:
         self.hall_wise_allocations = {}
         self.teacher_assignments = {}
         self.session = session  # 'FN' or 'AN'
-        self.exam_type = exam_type  # 'Internal' or 'SEM'
         self.generation_date = datetime.now().strftime('%Y-%m-%d')
         
     def allocate_seats_mixed_department(self):
         """
-        Allocate seats with department mixing for Internal exams
-        For SEM: Linear by department
-        For Internal: Alternate departments to ensure no same-department bench mates
+        Allocate seats linearly by department
+        Complete one department before moving to the next
         """
         print("=" * 60)
         print("SEATING ALLOCATION - LINEAR DEPARTMENT FORMAT")
         print("=" * 60)
         
-        if self.exam_type == 'Internal':
-            return self._allocate_internal_mixed()
-        else:
-            return self._allocate_sem_linear()
-    
-    def _allocate_sem_linear(self):
-        """Linear allocation for SEM exams"""
         # Sort students by department and register number
         students_sorted = self.students_df.sort_values(
             ['Department', 'Register Number']
@@ -86,7 +70,7 @@ class SeatingAllocationSystem:
         
         for idx, student in students_sorted.iterrows():
             hall_no = self.halls_df.loc[current_hall_idx, 'hallno']
-            hall_capacity = self.halls_df.loc[current_hall_idx, 'effective_capacity']
+            hall_capacity = self.halls_df.loc[current_hall_idx, 'capacity']
             
             allocations.append({
                 'Hall No': hall_no,
@@ -110,63 +94,6 @@ class SeatingAllocationSystem:
         self.allocations = pd.DataFrame(allocations)
         print(f"\nTotal students allocated: {len(self.allocations)}")
         print(f"Halls used: {current_hall_idx + 1} out of {len(self.halls_df)}")
-        
-        # Create hall-wise summary
-        self._create_hall_wise_summary()
-        
-        return self.allocations
-    
-    def _allocate_internal_mixed(self):
-        """Allocation for Internal exams ensuring department mixing on benches"""
-        # Separate students by department and sort within each
-        dept_groups = {}
-        for dept in self.students_df['Department'].unique():
-            dept_students = self.students_df[self.students_df['Department'] == dept].sort_values('Register Number').reset_index(drop=True)
-            dept_groups[dept] = dept_students.to_dict('records')
-        
-        # Round-robin allocation across departments
-        departments = list(dept_groups.keys())
-        dept_indices = {dept: 0 for dept in departments}
-        
-        allocations = []
-        current_hall_idx = 0
-        current_seat_in_hall = 1
-        
-        total_students = len(self.students_df)
-        students_allocated = 0
-        
-        while students_allocated < total_students:
-            hall_no = self.halls_df.loc[current_hall_idx, 'hallno']
-            hall_capacity = self.halls_df.loc[current_hall_idx, 'effective_capacity']
-            
-            # Try to get students from different departments for the same bench
-            for dept_idx, dept in enumerate(departments):
-                if dept_indices[dept] < len(dept_groups[dept]):
-                    student = dept_groups[dept][dept_indices[dept]]
-                    
-                    allocations.append({
-                        'Hall No': hall_no,
-                        'Seat No': current_seat_in_hall,
-                        'Register Number': student['Register Number'],
-                        'Name': student['Name'],
-                        'Department': student['Department']
-                    })
-                    
-                    dept_indices[dept] += 1
-                    students_allocated += 1
-                    current_seat_in_hall += 1
-                    
-                    if current_seat_in_hall > hall_capacity:
-                        current_hall_idx += 1
-                        current_seat_in_hall = 1
-                    
-                    if students_allocated >= total_students:
-                        break
-        
-        self.allocations = pd.DataFrame(allocations)
-        print(f"\nTotal students allocated: {len(self.allocations)}")
-        print(f"Halls used: {current_hall_idx + 1} out of {len(self.halls_df)}")
-        print("Department mixing enabled - no same-department bench mates")
         
         # Create hall-wise summary
         self._create_hall_wise_summary()
@@ -322,55 +249,30 @@ class SeatingAllocationSystem:
     
     def convert_to_2d_layout(self, hall_no):
         """Convert student list to 2D grid layout using hall-specific columns"""
-        # Get the number of columns for this specific hall (represents benches)
-        num_benches = self.halls_df[self.halls_df['hallno'] == hall_no]['Columns'].values[0]
+        # Get the number of columns for this specific hall
+        num_cols = self.halls_df[self.halls_df['hallno'] == hall_no]['Columns'].values[0]
             
         hall_data = self.hall_wise_allocations[hall_no]
-        students = hall_data['Register Number'].tolist()
-        
         hall_capacity = self.halls_df[self.halls_df['hallno'] == hall_no]['capacity'].values[0]
         
-        if self.exam_type == 'SEM':
-            # SEM: 1 student per bench, simple grid
-            num_rows = int(np.ceil(hall_capacity / num_benches))
-            layout = []
-            for row in range(num_rows):
-                row_data = []
-                for col in range(num_benches):
-                    idx = row * num_benches + col
-                    if idx < len(students):
-                        row_data.append(students[idx])
-                    else:
-                        row_data.append("EMPTY")
-                layout.append(row_data)
-            return layout, num_rows, num_benches
-        else:
-            # Internal: 2 students per bench (left and right positions)
-            # Each bench becomes 2 cells in the table
-            num_rows = int(np.ceil(hall_capacity / num_benches))
-            layout = []
-            student_idx = 0
-            
-            for row in range(num_rows):
-                row_data = []
-                for bench in range(num_benches):
-                    # Left position
-                    if student_idx < len(students):
-                        row_data.append(students[student_idx])
-                        student_idx += 1
-                    else:
-                        row_data.append("EMPTY")
-                    
-                    # Right position
-                    if student_idx < len(students):
-                        row_data.append(students[student_idx])
-                        student_idx += 1
-                    else:
-                        row_data.append("EMPTY")
-                
-                layout.append(row_data)
-            
-            return layout, num_rows, num_benches
+        # Calculate number of rows needed
+        num_rows = int(np.ceil(hall_capacity / num_cols))
+        
+        # Create 2D grid
+        layout = []
+        students = hall_data['Register Number'].tolist()
+        
+        for row in range(num_rows):
+            row_data = []
+            for col in range(num_cols):
+                idx = row * num_cols + col
+                if idx < len(students):
+                    row_data.append(students[idx])
+                else:
+                    row_data.append("EMPTY")
+            layout.append(row_data)
+        
+        return layout, num_rows, num_cols
     
     def generate_hall_visual(self, hall_no, save_path=None):
         """Generate visual representation of hall layout using matplotlib"""
@@ -397,10 +299,7 @@ class SeatingAllocationSystem:
                 ha='center', fontsize=11)
         fig.text(0.5, 0.90, '[An Autonomous Institution]',
                 ha='center', fontsize=9, style='italic')
-        
-        # Add exam type to title
-        exam_type_text = 'Continuous Internal Assessment - I' if self.exam_type == 'Internal' else 'End Semester Examination'
-        fig.text(0.5, 0.87, f'SEATING ARRANGEMENT ({exam_type_text})',
+        fig.text(0.5, 0.87, 'SEATING ARRANGEMENT',
                 ha='center', fontsize=14, fontweight='bold')
         
         # Add date, session, and hall info
@@ -410,68 +309,36 @@ class SeatingAllocationSystem:
         fig.text(0.5, 0.82, f'Session:{self.session}', ha='center', fontsize=10)
         fig.text(0.9, 0.82, f'Hall:{hall_no}', ha='right', fontsize=10)
         
-        if self.exam_type == 'SEM':
-            # SEM: Simple column headers
-            col_headers = [str(i+1) for i in range(num_cols)]
-            table_data = [col_headers]
-            for row_idx, row in enumerate(layout):
-                table_data.append(row)
+        # Create column headers
+        col_headers = [str(i+1) for i in range(num_cols)]  # 1, 2, 3, 4, 5...
+        
+        # Prepare table data with row numbers
+        table_data = [col_headers]
+        for row_idx, row in enumerate(layout, 1):
+            table_data.append(row)
+        
+        # Create main seating table
+        table = ax.table(cellText=table_data, cellLoc='center', loc='center',
+                        bbox=[0.1, 0.25, 0.8, 0.52])
+        
+        # Style the table
+        table.auto_set_font_size(False)
+        table.set_fontsize(9)
+        table.scale(1, 2)
+        
+        # Style all cells with borders only (no colors)
+        for key, cell in table.get_celld().items():
+            cell.set_edgecolor('black')
+            cell.set_linewidth(1)
+            cell.set_facecolor('white')
             
-            # Create main seating table
-            table = ax.table(cellText=table_data, cellLoc='center', loc='center',
-                            bbox=[0.1, 0.20, 0.8, 0.57])
-            table.auto_set_font_size(False)
-            table.set_fontsize(9)
-            table.scale(1, 2)
+            # Make header row bold
+            if key[0] == 0:
+                cell.set_text_props(weight='bold')
             
-            # Style all cells
-            for key, cell in table.get_celld().items():
-                cell.set_edgecolor('black')
-                cell.set_linewidth(1)
-                cell.set_facecolor('white')
-                if key[0] == 0:
-                    cell.set_text_props(weight='bold')
-                cell_text = cell.get_text().get_text()
-                if "EMPTY" in cell_text:
-                    cell.set_text_props(color='lightgray', style='italic')
-        else:
-            # Internal: Bench headers with 2 sub-columns each
-            # First create data rows
-            table_data = []
-            for row_idx, row in enumerate(layout):
-                table_data.append(row)
-            
-            # Calculate actual column count (benches × 2 for left/right positions)
-            actual_cols = num_cols * 2
-            
-            # Create table without headers first
-            table = ax.table(cellText=table_data, cellLoc='center', loc='center',
-                            bbox=[0.1, 0.25, 0.8, 0.52])
-            table.auto_set_font_size(False)
-            table.set_fontsize(8)
-            table.scale(1, 2)
-            
-            # Style all cells
-            for key, cell in table.get_celld().items():
-                cell.set_edgecolor('black')
-                cell.set_linewidth(1)
-                cell.set_facecolor('white')
-                cell_text = cell.get_text().get_text()
-                if "EMPTY" in cell_text:
-                    cell.set_text_props(color='lightgray', style='italic')
-            
-            # Add bench number headers manually above the table
-            header_y = 0.78
-            table_left = 0.1
-            table_width = 0.8
-            col_width = table_width / num_cols
-            
-            for i in range(num_cols):
-                x_center = table_left + (i + 0.5) * col_width
-                # Add bench number
-                fig.text(x_center, header_y, str(i+1),
-                        ha='center', va='center', fontsize=11, fontweight='bold',
-                        bbox=dict(boxstyle='round,pad=0.5', facecolor='white', edgecolor='black', linewidth=1))
+            # Style empty cells
+            if cell.get_text().get_text() == "EMPTY":
+                cell.set_text_props(color='lightgray', style='italic')
         
         # Add department breakdown table at bottom
         dept_data = [[dept, count] for dept, count in dept_counts.items()]
@@ -809,32 +676,15 @@ def main():
     students_file = os.path.join(script_dir, 'year1.csv')
     teachers_file = os.path.join(script_dir, 'Teachers.csv')
     
-    # Get exam type from user
-    print("\nExam Types:")
-    print("  1. Internal - Continuous Internal Assessment (2 students per bench)")
-    print("  2. SEM - End Semester Examination (1 student per bench)")
-    exam_type_input = input("\nEnter exam type (Internal/SEM) [default: Internal]: ").strip().upper()
-    if exam_type_input not in ['INTERNAL', 'SEM']:
-        exam_type = 'Internal'
-    else:
-        exam_type = 'Internal' if exam_type_input == 'INTERNAL' else 'SEM'
-    
     # Get session from user (default to FN)
-    session = input("Enter session (FN/AN) [default: FN]: ").strip().upper()
+    session = input("\nEnter session (FN/AN) [default: FN]: ").strip().upper()
     if session not in ['FN', 'AN']:
         session = 'FN'
     
     output_file = os.path.join(script_dir, 'first_year_seating_allocation.xlsx')
     
     # Create allocation system
-    system = SeatingAllocationSystem(halls_file, students_file, teachers_file, 
-                                     session=session, exam_type=exam_type)
-    
-    print(f"\nGenerating seating arrangement for {exam_type} Exam ({session} session)...")
-    if exam_type == 'Internal':
-        print("Mode: 2 students per bench (shared seating)")
-    else:
-        print("Mode: 1 student per bench (individual seating)")
+    system = SeatingAllocationSystem(halls_file, students_file, teachers_file, session=session)
     
     # Perform allocation (Linear Department Format - main allocation)
     allocations = system.allocate_seats_mixed_department()
@@ -855,8 +705,6 @@ def main():
     print("\n" + "=" * 60)
     print("ALLOCATION COMPLETE!")
     print("=" * 60)
-    print(f"\nExam Type: {exam_type}")
-    print(f"Session: {session}")
     print(f"\nGenerated Files:")
     print(f"  1. Excel Report: {output_file}")
     print(f"  2. Student PDF: {student_pdf}")
