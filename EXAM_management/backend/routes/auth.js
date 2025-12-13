@@ -1,7 +1,7 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
-const User = require('../models/User');
 const { protect } = require('../middleware/auth');
+const User = require('../models/User');
 
 const router = express.Router();
 
@@ -27,8 +27,8 @@ router.post('/login', async (req, res) => {
             });
         }
 
-        // Check for user
-        const user = await User.findOne({ email }).populate('department');
+        // Check for user in database
+        const user = await User.findOne({ email }).select('+password');
 
         if (!user) {
             return res.status(401).json({
@@ -37,8 +37,8 @@ router.post('/login', async (req, res) => {
             });
         }
 
-        // Check password
-        const isMatch = await user.matchPassword(password);
+        // Check password (plain text comparison for now, can add bcrypt later)
+        const isMatch = password === user.password;
 
         if (!isMatch) {
             return res.status(401).json({
@@ -56,7 +56,14 @@ router.post('/login', async (req, res) => {
         }
 
         // Create token
-        const token = generateToken(user._id);
+        const token = jwt.sign({ 
+            user: {
+                id: user._id,
+                name: user.name,
+                email: user.email,
+                role: user.role
+            }
+        }, process.env.JWT_SECRET, { expiresIn: '30d' });
 
         // Set cookie
         res.cookie('token', token, {
@@ -78,12 +85,7 @@ router.post('/login', async (req, res) => {
         res.status(200).json({
             success: true,
             token,
-            user: {
-                id: user._id,
-                name: user.name,
-                email: user.email,
-                role: user.role
-            },
+            user: { id: user._id, name: user.name, email: user.email, role: user.role },
             redirectUrl
         });
 
@@ -112,22 +114,7 @@ router.get('/logout', (req, res) => {
 // @desc    Get current logged in user
 // @access  Private
 router.get('/me', protect, async (req, res) => {
-    try {
-        const user = await User.findById(req.user.id)
-            .select('-password')
-            .populate('department');
-
-        res.status(200).json({
-            success: true,
-            data: user
-        });
-    } catch (error) {
-        console.error('Get User Error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Server error'
-        });
-    }
+    res.status(200).json({ success: true, data: req.user });
 });
 
 module.exports = router;

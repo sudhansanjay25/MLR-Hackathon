@@ -14,6 +14,13 @@ const departmentSchema = new mongoose.Schema({
         uppercase: true,
         trim: true
     },
+    hod: {
+        type: String
+    },
+    totalStudents: {
+        type: Number,
+        default: 0
+    },
     isActive: {
         type: Boolean,
         default: true

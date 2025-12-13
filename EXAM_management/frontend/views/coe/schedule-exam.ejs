@@ -388,33 +388,41 @@
             await loadHalls();
         });
         
-        // Listen for year selection to fetch student count
-        document.getElementById('year').addEventListener('change', async (e) => {
-            const year = e.target.value;
-            if (year) {
-                await fetchStudentCount(year);
+        // Listen for year and semester selection to fetch student count
+        document.getElementById('year').addEventListener('change', fetchStudentCountIfReady);
+        document.getElementById('semester').addEventListener('change', fetchStudentCountIfReady);
+        
+        async function fetchStudentCountIfReady() {
+            const year = document.getElementById('year').value;
+            const semester = document.getElementById('semester').value;
+            
+            if (year && semester) {
+                await fetchStudentCount(year, semester);
             } else {
                 document.getElementById('studentCounter').style.display = 'none';
             }
-        });
+        }
         
-        // Fetch student count for selected year
-        async function fetchStudentCount(year) {
+        // Fetch student count for selected year and semester
+        async function fetchStudentCount(year, semester) {
             try {
-                const response = await fetch(`/api/coe/student-count?year=${year}`);
+                const response = await fetch(`/api/coe/students/count?year=${year}&semester=${semester}`);
                 const data = await response.json();
                 
                 totalStudents = data.count || 0;
                 document.getElementById('remainingStudents').textContent = totalStudents;
-                document.getElementById('capacityInfo').textContent = `Total students in Year ${year}: ${totalStudents}`;
+                document.getElementById('capacityInfo').textContent = `Total students in Year ${year}, Semester ${semester}: ${totalStudents}`;
                 document.getElementById('studentCounter').style.display = 'block';
                 document.getElementById('studentCounter').classList.remove('complete');
                 
-                // Reset all hall selections when year changes
+                // Reset all hall selections when year/semester changes
                 document.querySelectorAll('input[name="halls"]:checked').forEach(cb => cb.checked = false);
                 updateStudentCount();
             } catch (error) {
                 console.error('Error fetching student count:', error);
+                totalStudents = 0;
+                document.getElementById('remainingStudents').textContent = '0';
+                document.getElementById('capacityInfo').textContent = 'Error loading student count';
             }
         }
         

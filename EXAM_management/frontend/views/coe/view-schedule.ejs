@@ -358,20 +358,28 @@
         <!-- Resources Section -->
         <div class="resources-section">
             <div class="resource-card">
-                <h3>Selected Faculty (<%= schedule.selectedFaculty.length %>)</h3>
+                <h3>Selected Faculty (<%= schedule.facultyIncharge ? schedule.facultyIncharge.length : 0 %>)</h3>
                 <ul class="resource-list">
-                    <% schedule.selectedFaculty.forEach(faculty => { %>
-                    <li><%= faculty.name %> (<%= faculty.employeeId %>)</li>
-                    <% }) %>
+                    <% if (schedule.facultyIncharge && schedule.facultyIncharge.length > 0) { %>
+                        <% schedule.facultyIncharge.forEach(faculty => { %>
+                        <li><%= faculty.name %> (<%= faculty.email %>)</li>
+                        <% }) %>
+                    <% } else { %>
+                        <li>No faculty assigned</li>
+                    <% } %>
                 </ul>
             </div>
             
             <div class="resource-card">
-                <h3>Selected Halls (<%= schedule.selectedHalls.length %>)</h3>
+                <h3>Selected Halls (<%= schedule.halls ? schedule.halls.length : 0 %>)</h3>
                 <ul class="resource-list">
-                    <% schedule.selectedHalls.forEach(hall => { %>
-                    <li><%= hall.hallNumber %> - Capacity: <%= hall.capacity %></li>
-                    <% }) %>
+                    <% if (schedule.halls && schedule.halls.length > 0) { %>
+                        <% schedule.halls.forEach(hall => { %>
+                        <li><%= hall.hallNumber %> - <%= hall.building %> (Capacity: <%= hall.capacity %>)</li>
+                        <% }) %>
+                    <% } else { %>
+                        <li>No halls assigned</li>
+                    <% } %>
                 </ul>
             </div>
         </div>

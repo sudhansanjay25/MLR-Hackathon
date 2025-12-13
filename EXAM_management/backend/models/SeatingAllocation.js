@@ -9,7 +9,7 @@ const seatingAllocationSchema = new mongoose.Schema({
     examTimetable: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'ExamTimetable',
-        required: true
+        required: false
     },
     hall: {
         type: mongoose.Schema.Types.ObjectId,
@@ -26,7 +26,7 @@ const seatingAllocationSchema = new mongoose.Schema({
     },
     student: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
+        ref: 'Student',
         required: true
     },
     registerNumber: {
@@ -61,7 +61,7 @@ const seatingAllocationSchema = new mongoose.Schema({
 });
 
 // Compound index for uniqueness
-seatingAllocationSchema.index({ schedule: 1, examTimetable: 1, hall: 1, seatNumber: 1 }, { unique: true });
+seatingAllocationSchema.index({ schedule: 1, hall: 1, seatNumber: 1 }, { unique: true });
 seatingAllocationSchema.index({ student: 1, schedule: 1 });
 
 module.exports = mongoose.model('SeatingAllocation', seatingAllocationSchema);

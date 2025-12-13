@@ -94,6 +94,7 @@ async function runScheduling(params) {
     
     try {
         // Execute Python scheduler to generate timetable
+        // Use scheduler_wrapper.py from modules folder
         const scriptPath = path.join(__dirname, '../../modules/scheduler_wrapper.py');
         const paramsJson = JSON.stringify({
             year,
@@ -149,6 +150,7 @@ async function runSeatingArrangement(params) {
     
     try {
         // Execute Python seating allocator
+        // Use seating_wrapper.py from modules folder
         const scriptPath = path.join(__dirname, '../../modules/seating_wrapper.py');
         const paramsJson = JSON.stringify({
             year,
@@ -307,7 +309,7 @@ async function generateHallTicket(params) {
         qrData
     } = params;
 
-    const scriptPath = path.join(__dirname, '../../modules/hall_ticket_generation/server.py');
+    const scriptPath = path.join(__dirname, '../../../Hall Ticket Generation/v2_weasyprint/server.py');
     
     try {
         const result = await executePythonScript(scriptPath, []);

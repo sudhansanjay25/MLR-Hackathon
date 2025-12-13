@@ -1,8 +1,14 @@
 const express = require('express');
 const { protect, authorize } = require('../middleware/auth');
-const { runScheduling, runSeatingArrangement, generateTimetablePDF, generateSeatingPDFs } = require('../utils/pythonRunner');
-// Scrapped DB dependence for scheduling/seating; adapt to module outputs
-// Keep core Python modules intact; align responses to frontend expectations
+const { runScheduling, runSeatingArrangement, generateTimetablePDF, generateSeatingPDFs, generateSingleHallTicket, generateBulkHallTickets } = require('../utils/pythonRunner');
+const ExamSchedule = require('../models/ExamSchedule');
+const ExamTimetable = require('../models/ExamTimetable');
+const SeatingAllocation = require('../models/SeatingAllocation');
+const HallTicket = require('../models/HallTicket');
+const User = require('../models/User');
+const Hall = require('../models/Hall');
+const Subject = require('../models/Subject');
+const Department = require('../models/Department');
 const path = require('path');
 const fs = require('fs').promises;
 
@@ -47,11 +53,15 @@ router.get('/schedule-exam', async (req, res) => {
 // @access  Private (COE only)
 router.get('/view-schedules', async (req, res) => {
     try {
-        // No DB: provide a lightweight view using generated uploads if present
+        const schedules = await ExamSchedule.find({ isActive: true })
+            .populate('facultyIncharge', 'name email')
+            .populate('halls', 'hallNumber building')
+            .sort({ createdAt: -1 });
+        
         res.render('coe/view-schedules', {
             user: req.user,
             title: 'View Schedules',
-            schedules: []
+            schedules
         });
     } catch (error) {
         console.error('View Schedules Error:', error);
@@ -64,8 +74,10 @@ router.get('/view-schedules', async (req, res) => {
 // @access  Private (COE only)
 router.get('/faculty', async (req, res) => {
     try {
-        // Without DB, return empty list or integrate a static list if available
-        res.json([]);
+        const faculty = await User.find({ role: 'faculty', isActive: true })
+            .select('name email department employeeId')
+            .sort('name');
+        res.json(faculty);
     } catch (error) {
         console.error('Get Faculty Error:', error);
         res.status(500).json({ message: 'Error fetching faculty' });
@@ -77,11 +89,38 @@ router.get('/faculty', async (req, res) => {
 // @access  Private (COE only)
 router.get('/halls', async (req, res) => {
     try {
-        // Without DB, return empty list; frontend should provide selections
-        res.json([]);
+        const halls = await Hall.find({ isActive: true })
+            .select('hallNumber building capacity examCapacity floor columns')
+            .sort('hallNumber');
+        res.json(halls);
     } catch (error) {
         console.error('Get Halls Error:', error);
         res.status(500).json({ message: 'Error fetching halls' });
+    }
+});
+
+// @route   GET /api/coe/students/count
+// @desc    Get student count for year and semester
+// @access  Private (COE only)
+router.get('/students/count', async (req, res) => {
+    try {
+        const { year, semester } = req.query;
+        const Student = require('../models/Student');
+        
+        if (!year || !semester) {
+            return res.status(400).json({ message: 'Year and semester are required' });
+        }
+        
+        const count = await Student.countDocuments({
+            year: parseInt(year),
+            semester: parseInt(semester),
+            isActive: true
+        });
+        
+        res.json({ count, year: parseInt(year), semester: parseInt(semester) });
+    } catch (error) {
+        console.error('Get Student Count Error:', error);
+        res.status(500).json({ message: 'Error fetching student count' });
     }
 });
 
@@ -92,8 +131,9 @@ router.get('/student-count', async (req, res) => {
     try {
         const { year } = req.query;
         if (!year) return res.status(400).json({ message: 'Year parameter is required' });
-        // Without DB, let frontend handle counts; return 0 as placeholder
-        res.json({ count: 0, year: parseInt(year) });
+        
+        const count = await User.countDocuments({ role: 'student', year: parseInt(year), isActive: true });
+        res.json({ count, year: parseInt(year) });
     } catch (error) {
         console.error('Get Student Count Error:', error);
         res.status(500).json({ message: 'Error fetching student count' });
@@ -120,89 +160,103 @@ router.post('/schedule-exam', async (req, res) => {
 
         // Validation
         if (!academicYear || !examType || !year || !semester || !startDate || !endDate) {
-            return res.status(400).json({ message: 'Missing required fields (academicYear, examType, year, semester, startDate, endDate required)' });
+            return res.status(400).json({ message: 'Missing required fields' });
         }
 
-        if (selectedFaculty.length === 0 || selectedHalls.length === 0) {
+        if (!selectedFaculty || selectedFaculty.length === 0 || !selectedHalls || selectedHalls.length === 0) {
             return res.status(400).json({ message: 'Must select at least one faculty and one hall' });
         }
 
-        // No DB: directly run scheduling and seating via Python wrappers
+        // Step 1: Create exam schedule in DB
+        const newSchedule = await ExamSchedule.create({
+            academicYear,
+            examType,
+            year,
+            semester,
+            session: session || 'FN',
+            startDate,
+            endDate,
+            facultyIncharge: selectedFaculty,
+            halls: selectedHalls,
+            status: 'Scheduled'
+        });
 
-        // Step 1: Run Python scheduling script
+        console.log('Exam schedule created:', newSchedule._id);
+
+        // Step 2: Run Python scheduling script
         console.log('Running scheduling algorithm...');
         const schedulingParams = {
             year,
             semester,
             examType,
-            session: session || null,
+            session: session || 'FN',
             startDate,
             endDate,
             holidays: holidays || [],
-            scheduleId: `${year}-${semester}-${examType}-${Date.now()}`
+            scheduleId: newSchedule._id.toString()
         };
 
         const schedulingResult = await runScheduling(schedulingParams);
-        
-        console.log('Scheduling result:', JSON.stringify(schedulingResult, null, 2));
         
         if (!schedulingResult.success) {
             throw new Error('Scheduling failed: ' + schedulingResult.message);
         }
 
-        console.log(`Scheduling completed successfully - ${schedulingResult.timetable.length} timetable entries generated`);
+        console.log(`Scheduling completed - ${schedulingResult.timetable.length} entries generated`);
 
-        // Step 2: Prepare timetable payload for frontend (no DB)
-        const assignedHalls = selectedHalls;
-        const assignedFaculty = selectedFaculty.slice(0, 2);
+        // Step 3: Save timetable entries to DB
         const timetableEntries = schedulingResult.timetable.map(entry => ({
+            schedule: newSchedule._id,
+            subject: entry.subject,  // Python returns 'subject' not 'subjectId'
             subjectCode: entry.subjectCode,
             subjectName: entry.subjectName || entry.subjectCode,
             date: entry.date,
             timeStart: entry.timeStart,
             timeEnd: entry.timeEnd,
-            halls: assignedHalls,
-            invigilators: assignedFaculty
+            halls: selectedHalls,
+            invigilators: selectedFaculty.slice(0, 2)
         }));
 
-        // Step 3: Run seating arrangement
+        await ExamTimetable.insertMany(timetableEntries);
+        console.log('Timetable entries saved to DB');
+
+        // Step 4: Run seating arrangement
         console.log('Running seating arrangement...');
         const seatingParams = {
             year,
             examType,
-            session: session || null,
+            session: session || 'FN',
             halls: selectedHalls,
-            scheduleId: schedulingParams.scheduleId
+            scheduleId: newSchedule._id.toString()
         };
 
         const seatingResult = await runSeatingArrangement(seatingParams);
         
-        if (!seatingResult.success) {
-            console.warn('Seating arrangement warning:', seatingResult.message);
-        } else {
-            console.log('Seating arrangement completed successfully');
-
-            // Collect seating info for response
-            const seatingInfo = {
-                studentPdf: seatingResult.data?.studentPdfPath,
-                facultyPdf: seatingResult.data?.facultyPdfPath,
-                totalStudents: seatingResult.data?.totalStudents,
-                hallsUsed: seatingResult.data?.hallsUsed,
-                allocationsCount: seatingResult.allocations?.length || 0
-            };
+        if (seatingResult.success && seatingResult.allocations) {
+            console.log('Seating arrangement completed');
+            console.log(`Python script already saved ${seatingResult.totalStudents} allocations to MongoDB`);
+            
+            // Note: Python script already saves allocations to DB, no need to insert again
+            // The allocations are returned in seatingResult for reference only
         }
 
-        // Step 4: Generate PDFs
+        // Step 5: Generate PDFs
         console.log('Generating PDFs...');
         try {
-            const timetablePdfResult = await generateTimetablePDF(schedulingParams.scheduleId);
-            const seatingPdfsResult = await generateSeatingPDFs(schedulingParams.scheduleId);
-            if (timetablePdfResult.success) {
-                console.log('Timetable PDF generated:', timetablePdfResult.filename);
-            }
-            if (seatingPdfsResult.success) {
-                console.log('Seating PDFs generated:', seatingPdfsResult.studentPdf.filename, seatingPdfsResult.facultyPdf.filename);
-            }
+            const outputDir = path.join(__dirname, '../../outputs');
+            const timetablePdfResult = await generateTimetablePDF(newSchedule._id.toString(), path.join(outputDir, 'timetables'));
+            const seatingPdfsResult = await generateSeatingPDFs(newSchedule._id.toString(), path.join(outputDir, 'seating'));
+            
+            // Update schedule with PDF paths
+            await ExamSchedule.findByIdAndUpdate(newSchedule._id, {
+                timetablePdfPath: timetablePdfResult.pdfPath,
+                seatingPdfPaths: {
+                    studentPdf: seatingPdfsResult.studentPdf.path,
+                    facultyPdf: seatingPdfsResult.facultyPdf.path
+                }
+            });
+            
+            console.log('PDFs generated and paths saved to DB');
         } catch (pdfError) {
             console.error('PDF Generation Error:', pdfError);
             // Don't fail the whole request if PDF generation fails
@@ -210,9 +264,9 @@ router.post('/schedule-exam', async (req, res) => {
 
         res.status(201).json({
             success: true,
-            message: 'Schedule and seating generated successfully',
-            scheduleId: schedulingParams.scheduleId,
-            timetable: timetableEntries
+            message: 'Schedule created successfully',
+            scheduleId: newSchedule._id,
+            timetableCount: timetableEntries.length
         });
 
     } catch (error) {
@@ -229,12 +283,23 @@ router.post('/schedule-exam', async (req, res) => {
 // @access  Private (COE only)
 router.get('/view-schedule/:id', async (req, res) => {
     try {
-        // With scrapped DB, render with minimal context
+        const schedule = await ExamSchedule.findById(req.params.id)
+            .populate('facultyIncharge', 'name email employeeId')
+            .populate('halls', 'hallNumber building capacity examCapacity columns');
+        
+        if (!schedule) {
+            return res.status(404).send('Schedule not found');
+        }
+        
+        const timetable = await ExamTimetable.find({ schedule: req.params.id })
+            .populate('subject', 'code name')
+            .sort({ date: 1 });
+        
         res.render('coe/view-schedule', {
             user: req.user,
             title: 'View Schedule',
-            schedule: { _id: req.params.id },
-            timetable: []
+            schedule,
+            timetable
         });
     } catch (error) {
         console.error('View Schedule Error:', error);

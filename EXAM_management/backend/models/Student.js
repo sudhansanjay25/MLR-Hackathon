@@ -5,61 +5,64 @@ const studentSchema = new mongoose.Schema({
         type: String,
         required: true,
         unique: true,
-        trim: true,
-        index: true
+        uppercase: true,
+        trim: true
     },
     name: {
         type: String,
         required: true,
         trim: true
     },
-    department: {
-        type: String,
-        required: true,
-        trim: true,
-        index: true
-    },
-    yearOfStudy: {
-        type: Number,
-        required: true,
-        min: 1,
-        max: 4,
-        index: true
-    },
-    semester: {
-        type: Number,
-        min: 1,
-        max: 8
-    },
     email: {
         type: String,
+        required: true,
+        unique: true,
         lowercase: true,
         trim: true
     },
-    phone: {
+    department: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Department',
+        required: true
+    },
+    year: {
+        type: Number,
+        required: true,
+        min: 1,
+        max: 4
+    },
+    semester: {
+        type: Number,
+        required: true,
+        min: 1,
+        max: 8
+    },
+    batch: {
+        type: String
+    },
+    dateOfBirth: {
+        type: Date
+    },
+    gender: {
         type: String,
-        trim: true
+        enum: ['Male', 'Female', 'Other']
+    },
+    phoneNumber: {
+        type: String
     },
     photoUrl: {
+        type: String
+    },
+    regulation: {
         type: String,
-        default: '/images/default-avatar.png'
+        default: 'R22'
     },
     isActive: {
         type: Boolean,
-        default: true,
-        index: true
-    },
-    createdAt: {
-        type: Date,
-        default: Date.now
+        default: true
     }
 }, {
-    collection: 'students',
     timestamps: true
 });
-
-// Index for common queries
-studentSchema.index({ yearOfStudy: 1, isActive: 1 });
-studentSchema.index({ department: 1, yearOfStudy: 1 });
 
 module.exports = mongoose.model('Student', studentSchema);
