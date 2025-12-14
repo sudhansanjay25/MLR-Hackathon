@@ -49,7 +49,13 @@ def print_schedule_table(schedule, exam_type):
             if exam_type == 'SEMESTER':
                 session_str += f" ({config.SESSION_TIMINGS[exam['session']]})"
             elif exam_type == 'INTERNAL':
-                session_str = config.SESSION_TIMINGS['SINGLE']
+                # Use internal-specific timings
+                if exam['session'] == 'FN':
+                    session_str = f"FN ({config.SESSION_TIMINGS['FN_INTERNAL']})"
+                elif exam['session'] == 'AN':
+                    session_str = f"AN ({config.SESSION_TIMINGS['AN_INTERNAL']})"
+                else:
+                    session_str = f"{exam['session']}"
             
             # Truncate subject name if too long
             subject_name = exam['subject_name']
