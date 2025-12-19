@@ -137,6 +137,34 @@
             display: table-header-group;
         }
         
+        /* Instructions section */
+        .instructions {
+            margin-top: 6mm;
+            padding: 3mm;
+            border: 1px solid #000;
+            page-break-inside: avoid;
+        }
+        
+        .instructions h3 {
+            font-size: 11pt;
+            font-weight: bold;
+            margin-bottom: 3mm;
+            text-align: center;
+            text-decoration: underline;
+        }
+        
+        .instructions ol {
+            margin-left: 5mm;
+            padding-left: 0;
+        }
+        
+        .instructions li {
+            font-size: 9pt;
+            margin-bottom: 2mm;
+            line-height: 1.5;
+            text-align: justify;
+        }
+        
         /* No signatures - removed footer section */
     </style>
 </head>
@@ -198,6 +226,19 @@
             {% endfor %}
         </tbody>
     </table>
+
+    <!-- Examination Hall Instructions -->
+    <div class="instructions">
+        <h3>Discipline in the Examination Hall – Important Instructions</h3>
+        <ol>
+            <li>Candidates must check the Hall Number and seating plan daily, enter the hall 15 minutes before the examination, and occupy the allotted seat correctly.</li>
+            <li>Candidates must carry their Admit Card and Identity Card and ensure the answer booklet is complete, undamaged, and filled with correct details (Register No., Course, Date, etc.).</li>
+            <li>On receiving the question paper, candidates must verify the Course Code/Name and immediately report any missing data or discrepancies to the invigilator.</li>
+            <li>Silence must be maintained throughout the examination; candidates must sign the attendance sheet before leaving the hall.</li>
+            <li>Possession of mobile phones, programmable calculators, notes, or any unauthorized material is strictly prohibited; malpractice will attract severe disciplinary action, including cancellation of exams.</li>
+            <li>Candidates shall not leave the hall without permission, must not detach or take answer booklets outside, and must return any issued data books or manuals before exit.</li>
+        </ol>
+    </div>
 
 </body>
 </html>

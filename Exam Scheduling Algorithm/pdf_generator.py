@@ -595,14 +595,14 @@ def generate_schedule_pdf(schedule, violations, exam_type, year,
             pdf_gen.elements.append(dept_table)
     
     # Add violations summary if any (on last page)
-    if violations:
-        pdf_gen.elements.append(Spacer(1, 20))
+    # if violations:
+    #     pdf_gen.elements.append(Spacer(1, 20))
         
-        violations_para = Paragraph(
-            f"<b>Note:</b> {len(violations)} constraint violation(s) detected due to scheduling constraints.",
-            pdf_gen.subtitle_style
-        )
-        pdf_gen.elements.append(violations_para)
+    #     violations_para = Paragraph(
+    #         f"<b>Note:</b> {len(violations)} constraint violation(s) detected due to scheduling constraints.",
+    #         pdf_gen.subtitle_style
+    #     )
+    #     pdf_gen.elements.append(violations_para)
     
     # Generate PDF
     pdf_path = pdf_gen.generate()

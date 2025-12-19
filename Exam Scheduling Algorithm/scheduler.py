@@ -183,25 +183,40 @@ class ExamScheduler:
         if not subjects:
             raise ValueError(f"No semester subjects found for year {year}")
         
+        # For SEMESTER exams, count subjects per department and take the maximum
+        # (department with most subjects determines the number of slots needed)
+        dept_subject_count = {}
+        for subject in subjects:
+            dept = subject['department']
+            if dept not in dept_subject_count:
+                dept_subject_count[dept] = []
+            dept_subject_count[dept].append(subject)
+        
+        # Find department with maximum subjects
+        max_subjects_dept = max(dept_subject_count.keys(), key=lambda d: len(dept_subject_count[d]))
+        subjects_to_schedule = len(dept_subject_count[max_subjects_dept])
+        
+        # Use the department with most subjects as reference for scheduling
+        reference_subjects = dept_subject_count[max_subjects_dept]
+        
         # Calculate total slots needed
         total_slots = len(available_dates) * 2  # FN + AN per day
         
         print(f"\n📊 Scheduling Analysis:")
         print(f"   Available dates: {len(available_dates)}")
         print(f"   Total slots: {total_slots}")
-        print(f"   Subjects to schedule: {len(subjects)}")
+        print(f"   Subjects to schedule: {subjects_to_schedule} (max from {max_subjects_dept})")
+        print(f"   Total subject entries (all depts): {len(subjects)}")
         
-        if len(subjects) > total_slots:
+        if subjects_to_schedule > total_slots:
             print(f"   ⚠️  WARNING: Not enough slots! Need to extend date range.")
-        
-        # Build conflict graph
-        conflicts = self.build_conflict_graph(subjects)
         
         # Initialize schedule and tracking
         schedule = []
         violations = []
         dept_last_exam = {}  # Track last exam per department
         dept_date_usage = {}  # Track which dates are used per department (entire day)
+        slot_usage = set()  # Track which slots are used globally
         
         # Create slots
         slots = []
@@ -209,71 +224,108 @@ class ExamScheduler:
             slots.append({'date': date, 'session': 'FN'})
             slots.append({'date': date, 'session': 'AN'})
         
-        # Schedule each subject
-        for subject in subjects:
-            subject_id = subject['subject_id']
-            dept = subject['department']
+        # For SEM exams, schedule slot by slot, allocating one subject per department per slot
+        # All departments take their respective subjects at the same time
+        slot_index = 0
+        subjects_scheduled_per_dept = {dept: 0 for dept in dept_subject_count.keys()}
+        
+        for slot in slots:
+            slot_key = f"{slot['date']}_{slot['session']}"
             
-            scheduled = False
-            best_slot = None
-            violation_msg = None
+            # For this slot, schedule the next subject for each department
+            has_violations = False
+            violation_details = []
+            subjects_in_this_slot = []
             
-            # Try to find valid slot
-            for slot in slots:
+            for dept in dept_subject_count.keys():
+                # Check if this department has more subjects to schedule
+                if subjects_scheduled_per_dept[dept] >= len(dept_subject_count[dept]):
+                    continue  # This department is done
+                
+                # Get the next subject for this department
+                subject = dept_subject_count[dept][subjects_scheduled_per_dept[dept]]
                 date_key = f"{dept}_{slot['date']}"
                 
                 # Check if this date already used for this department (block entire day)
                 if date_key in dept_date_usage:
                     continue
                 
-                # Validate gap constraints
+                # Validate gap constraints for this department
                 last_exam = dept_last_exam.get(dept)
                 is_valid, msg = self.validate_gap_constraint(
                     last_exam, slot['date'], slot['session']
                 )
                 
-                if is_valid:
-                    best_slot = slot
-                    break
-                elif best_slot is None:
-                    # Keep track of first available slot even if constraint violated
-                    best_slot = slot
-                    violation_msg = msg
+                if not is_valid:
+                    has_violations = True
+                    violation_details.append({
+                        'dept': dept,
+                        'subject': subject,
+                        'message': msg
+                    })
+                
+                # Add subject to this slot
+                subjects_in_this_slot.append(subject)
+                subjects_scheduled_per_dept[dept] += 1
             
-            if best_slot is None:
-                raise ValueError(f"No slots available for {subject['subject_code']}")
+            # If no subjects scheduled in this slot, we're done or need to force schedule
+            if not subjects_in_this_slot:
+                # Check if all departments are done
+                all_done = all(
+                    subjects_scheduled_per_dept[dept] >= len(dept_subject_count[dept])
+                    for dept in dept_subject_count.keys()
+                )
+                if all_done:
+                    break  # All subjects scheduled
+                else:
+                    # Force schedule remaining subjects
+                    for dept in dept_subject_count.keys():
+                        if subjects_scheduled_per_dept[dept] < len(dept_subject_count[dept]):
+                            subject = dept_subject_count[dept][subjects_scheduled_per_dept[dept]]
+                            subjects_in_this_slot.append(subject)
+                            subjects_scheduled_per_dept[dept] += 1
+                            has_violations = True
+                            violation_details.append({
+                                'dept': dept,
+                                'subject': subject,
+                                'message': f'CRITICAL: Forced allocation - date already used for {dept}'
+                            })
             
-            # Assign to best slot and block entire day for this department
-            date_key = f"{dept}_{best_slot['date']}"
-            dept_date_usage[date_key] = subject_id
-            
-            schedule.append({
-                'subject_id': subject_id,
-                'subject_code': subject['subject_code'],
-                'subject_name': subject['subject_name'],
-                'department': dept,
-                'date': best_slot['date'],
-                'session': best_slot['session'],
-                'subject_type': subject['subject_type'],
-                'student_count': subject['student_count']
-            })
-            
-            # Update last exam for department
-            dept_last_exam[dept] = {
-                'date': best_slot['date'],
-                'session': best_slot['session'],
-                'subject_type': subject['subject_type']
-            }
-            
-            # Log violation if any
-            if violation_msg:
-                violations.append({
-                    'subject_id': subject_id,
+            # Schedule all subjects in this slot
+            for subject in subjects_in_this_slot:
+                dept = subject['department']
+                date_key = f"{dept}_{slot['date']}"
+                dept_date_usage[date_key] = subject['subject_id']
+                
+                schedule.append({
+                    'subject_id': subject['subject_id'],
                     'subject_code': subject['subject_code'],
-                    'violation_type': 'GAP_CONSTRAINT',
-                    'description': violation_msg,
-                    'severity': 'MEDIUM'
+                    'subject_name': subject['subject_name'],
+                    'department': dept,
+                    'date': slot['date'],
+                    'session': slot['session'],
+                    'subject_type': subject['subject_type'],
+                    'student_count': subject['student_count']
                 })
+                
+                # Update last exam for department
+                dept_last_exam[dept] = {
+                    'date': slot['date'],
+                    'session': slot['session'],
+                    'subject_type': subject['subject_type']
+                }
+            
+            # Log violations if any
+            if has_violations and violation_details:
+                for violation in violation_details:
+                    subject = violation['subject']
+                    violations.append({
+                        'subject_id': subject['subject_id'],
+                        'subject_code': subject['subject_code'],
+                        'violation_type': 'GAP_CONSTRAINT',
+                        'description': violation['message'],
+                        'severity': 'MEDIUM' if 'CRITICAL' not in violation['message'] else 'CRITICAL'
+                    })
         
         return schedule, violations
     

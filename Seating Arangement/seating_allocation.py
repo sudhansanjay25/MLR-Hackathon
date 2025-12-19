@@ -22,10 +22,15 @@ from reportlab.lib.units import inch
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
+try:
+    from openpyxl.styles import PatternFill, Font, Border, Side, Alignment
+    from openpyxl.utils import get_column_letter
+except ImportError:
+    PatternFill = Font = Border = Side = Alignment = get_column_letter = None
 
 
 class SeatingAllocationSystem:
-    def __init__(self, halls_file, students_file, teachers_file, session='FN', exam_type='Internal', year=1, internal_number=1):
+    def __init__(self, halls_file, students_file, teachers_file, session='FN', exam_type='Internal', year=1, internal_number=1, selected_halls=None, selected_teachers=None):
         """Initialize the seating allocation system"""
         # Read halls data with columns information
         self.halls_df = pd.read_csv(halls_file)
@@ -39,6 +44,14 @@ class SeatingAllocationSystem:
         self.teachers_df = pd.read_csv(teachers_file)
         self.teachers_df.columns = self.teachers_df.columns.str.strip()
         
+        # Filter halls if specific halls are selected
+        if selected_halls:
+            self.halls_df = self.halls_df[self.halls_df['hallno'].isin(selected_halls)].reset_index(drop=True)
+        
+        # Filter teachers if specific teachers are selected
+        if selected_teachers:
+            self.teachers_df = self.teachers_df[self.teachers_df['Name'].isin(selected_teachers)].reset_index(drop=True)
+        
         # Prepare data structures
         self.allocations = []
         self.hall_wise_allocations = {}
@@ -49,6 +62,39 @@ class SeatingAllocationSystem:
         self.internal_number = internal_number  # 1 or 2 (only for Internal exams)
         self.generation_date = datetime.now().strftime('%Y-%m-%d')
         
+    def optimize_hall_selection(self):
+        """
+        Optimize hall selection to minimize empty spaces
+        Returns list of hall indices sorted by efficiency
+        """
+        total_students = len(self.students_df)
+        
+        if self.exam_type == 'Internal':
+            # For internal, capacity is benches, each bench holds 2 students
+            self.halls_df['effective_capacity'] = self.halls_df['capacity'] * 2
+        else:
+            # For SEM, capacity is seats (1 student per bench)
+            self.halls_df['effective_capacity'] = self.halls_df['capacity']
+        
+        # Sort halls by capacity (ascending) to pack efficiently
+        halls_sorted = self.halls_df.sort_values('effective_capacity').reset_index(drop=True)
+        
+        # Greedy algorithm: select halls that minimize total waste
+        selected_indices = []
+        accumulated_capacity = 0
+        
+        for idx, hall in halls_sorted.iterrows():
+            if accumulated_capacity >= total_students:
+                break
+            selected_indices.append(idx)
+            accumulated_capacity += hall['effective_capacity']
+        
+        # If we need all halls, return all
+        if accumulated_capacity < total_students:
+            selected_indices = list(range(len(self.halls_df)))
+        
+        return selected_indices
+    
     def allocate_seats_mixed_department(self):
         """
         Allocate seats based on exam type:
@@ -59,12 +105,15 @@ class SeatingAllocationSystem:
         print(f"SEATING ALLOCATION - {self.exam_type.upper()} EXAM FORMAT")
         print("=" * 60)
         
+        # Optimize hall selection to minimize waste
+        optimal_halls = self.optimize_hall_selection()
+        
         if self.exam_type == 'SEM':
             # Semester exam: Linear allocation, 1 student per bench
-            allocations = self._allocate_sem_linear()
+            allocations = self._allocate_sem_linear_optimized(optimal_halls)
         else:
             # Internal exam: Alternating departments, 2 students per bench
-            allocations = self._allocate_internal_alternating()
+            allocations = self._allocate_internal_alternating_optimized(optimal_halls)
         
         self.allocations = pd.DataFrame(allocations)
         print(f"\nTotal students allocated: {len(self.allocations)}")
@@ -74,7 +123,7 @@ class SeatingAllocationSystem:
         
         return self.allocations
     
-    def _allocate_sem_linear(self):
+    def _allocate_sem_linear_optimized(self, optimal_hall_indices):
         """Allocate for SEM exam: 1 student per bench with randomization and min 2 depts per hall"""
         # Group students by department and shuffle within each department
         departments = sorted(self.students_df['Department'].unique())
@@ -91,7 +140,7 @@ class SeatingAllocationSystem:
         dept_pointers = {dept: 0 for dept in departments}
         
         allocations = []
-        current_hall_idx = 0
+        current_hall_position = 0
         current_seat_in_hall = 1
         total_students = len(self.students_df)
         total_allocated = 0
@@ -100,7 +149,8 @@ class SeatingAllocationSystem:
         current_hall_depts = set()
         hall_start_idx = 0
         
-        while total_allocated < total_students:
+        while total_allocated < total_students and current_hall_position < len(optimal_hall_indices):
+            current_hall_idx = optimal_hall_indices[current_hall_position]
             hall_no = self.halls_df.loc[current_hall_idx, 'hallno']
             hall_capacity = self.halls_df.loc[current_hall_idx, 'capacity']
             
@@ -142,24 +192,24 @@ class SeatingAllocationSystem:
             
             # Move to next hall if current is full
             if current_seat_in_hall > hall_capacity:
-                print(f"  Hall {hall_no}: {len(current_hall_depts)} departments - {current_hall_depts}")
-                current_hall_idx += 1
+                Halposition += 1
                 current_seat_in_hall = 1
                 current_hall_depts = set()
                 hall_start_idx = len(allocations)
-                
-                if current_hall_idx >= len(self.halls_df):
-                    print("Warning: Ran out of halls!")
-                    break
         
         # Print final hall info if not empty
         if current_hall_depts:
             print(f"  Hall {hall_no}: {len(current_hall_depts)} departments - {current_hall_depts}")
         
-        print(f"Halls used: {current_hall_idx + 1} out of {len(self.halls_df)}")
+        print(f"Halls used: {current_hall_position + 1} out of {len(self.halls_df)}")
         return allocations
     
-    def _allocate_internal_alternating(self):
+    def _allocate_sem_linear(self):
+        """Wrapper for backward compatibility"""
+        optimal_halls = list(range(len(self.halls_df)))
+        return self._allocate_sem_linear_optimized(optimal_halls)
+    
+    def _allocate_internal_alternating_optimized(self, optimal_hall_indices):
         """Allocate for Internal exam: 2 students per bench with randomization and min 2 depts per hall"""
         # Group students by department and shuffle
         departments = sorted(self.students_df['Department'].unique())
@@ -176,7 +226,7 @@ class SeatingAllocationSystem:
         dept_pointers = {dept: 0 for dept in departments}
         
         allocations = []
-        current_hall_idx = 0
+        current_hall_position = 0
         current_seat_in_hall = 1
         total_students = len(self.students_df)
         total_allocated = 0
@@ -185,7 +235,8 @@ class SeatingAllocationSystem:
         current_hall_depts = set()
         
         # For Internal exams, capacity represents benches
-        while total_allocated < total_students:
+        while total_allocated < total_students and current_hall_position < len(optimal_hall_indices):
+            current_hall_idx = optimal_hall_indices[current_hall_position]
             hall_no = self.halls_df.loc[current_hall_idx, 'hallno']
             hall_capacity = self.halls_df.loc[current_hall_idx, 'capacity']
             
@@ -245,21 +296,22 @@ class SeatingAllocationSystem:
             # Move to next hall if current is full
             if current_seat_in_hall > hall_capacity:
                 print(f"  Hall {hall_no}: {len(current_hall_depts)} departments - {current_hall_depts}")
-                current_hall_idx += 1
+                current_hall_position += 1
                 current_seat_in_hall = 1
                 current_hall_depts = set()
-                
-                if current_hall_idx >= len(self.halls_df):
-                    print("Warning: Ran out of halls!")
-                    break
         
         # Print final hall info
         if current_hall_depts:
             print(f"  Hall {hall_no}: {len(current_hall_depts)} departments - {current_hall_depts}")
         
-        print(f"Halls used: {current_hall_idx + 1} out of {len(self.halls_df)}")
+        print(f"Halls used: {current_hall_position + 1} out of {len(self.halls_df)}")
         print(f"Benches per hall: ~{hall_capacity}, Total capacity: ~{hall_capacity * 2} students")
         return allocations
+    
+    def _allocate_internal_alternating(self):
+        """Wrapper for backward compatibility"""
+        optimal_halls = list(range(len(self.halls_df)))
+        return self._allocate_internal_alternating_optimized(optimal_halls)
     
     def allocate_seats_alternating_department(self):
         """
@@ -909,6 +961,266 @@ class SeatingAllocationSystem:
             print(f"  Hall {hall_no:2d}: {allocated:2d}/{hall_capacity:2d} seats ({utilization:5.1f}% utilized)")
 
 
+def manage_faculty_selection(teachers_df):
+    """Interactive faculty management"""
+    print("\n" + "=" * 60)
+    print("FACULTY/INVIGILATOR MANAGEMENT")
+    print("=" * 60)
+    
+    selected_teachers = []
+    available_teachers = teachers_df['Name'].str.strip().tolist()
+    
+    while True:
+        print("\n" + "-" * 60)
+        print("Options:")
+        print("  [1] View all available faculty")
+        print("  [2] Select faculty for invigilation")
+        print("  [3] Add new faculty member")
+        print("  [4] Remove selected faculty")
+        print("  [5] Finish faculty selection")
+        print("-" * 60)
+        
+        choice = input("\nEnter choice (1-5): ").strip()
+        
+        if choice == '1':
+            print("\nAvailable Faculty:")
+            for i, teacher in enumerate(available_teachers, 1):
+                status = "✓ SELECTED" if teacher in selected_teachers else "Available"
+                print(f"  [{i}] {teacher:<30} ({status})")
+        
+        elif choice == '2':
+            print("\nSelect Faculty (comma-separated numbers or 'all'):")
+            for i, teacher in enumerate(available_teachers, 1):
+                status = "✓" if teacher in selected_teachers else " "
+                print(f"  [{i}] [{status}] {teacher}")
+            
+            selection = input("\nEnter selection: ").strip().lower()
+            if selection == 'all':
+                selected_teachers = available_teachers.copy()
+                print(f"✓ Selected all {len(selected_teachers)} faculty members")
+            else:
+                try:
+                    indices = [int(x.strip()) - 1 for x in selection.split(',')]
+                    for idx in indices:
+                        if 0 <= idx < len(available_teachers):
+                            teacher = available_teachers[idx]
+                            if teacher not in selected_teachers:
+                                selected_teachers.append(teacher)
+                    print(f"✓ Total selected: {len(selected_teachers)} faculty")
+                except:
+                    print("Invalid input!")
+        
+        elif choice == '3':
+            name = input("\nEnter new faculty name: ").strip()
+            if name:
+                available_teachers.append(name)
+                selected_teachers.append(name)
+                print(f"✓ Added and selected: {name}")
+        
+        elif choice == '4':
+            if not selected_teachers:
+                print("No faculty selected yet!")
+                continue
+            print("\nSelected Faculty:")
+            for i, teacher in enumerate(selected_teachers, 1):
+                print(f"  [{i}] {teacher}")
+            try:
+                idx = int(input("\nEnter number to remove (0 to cancel): ").strip()) - 1
+                if 0 <= idx < len(selected_teachers):
+                    removed = selected_teachers.pop(idx)
+                    print(f"✓ Removed: {removed}")
+            except:
+                print("Invalid input!")
+        
+        elif choice == '5':
+            if len(selected_teachers) == 0:
+                print("Warning: No faculty selected!")
+                confirm = input("Continue without faculty? (y/n): ").strip().lower()
+                if confirm == 'y':
+                    break
+            else:
+                print(f"\n✓ {len(selected_teachers)} faculty members selected")
+                break
+        else:
+            print("Invalid choice!")
+    
+    return selected_teachers
+    
+    # Get exam type from user
+    print("\nExam Types:")
+    print("  1. Internal - Continuous Internal Assessment (2 students per bench)")
+    print("  2. SEM - End Semester Examination (1 student per bench)")
+    exam_type_input = input("\nEnter exam type (Internal/SEM) [default: Internal]: ").strip().upper()
+    if exam_type_input not in ['INTERNAL', 'SEM']:
+        exam_type = 'Internal'
+    else:
+        exam_type = 'Internal' if exam_type_input == 'INTERNAL' else 'SEM'
+    
+    # Get internal exam number if Internal exam is selected
+    internal_number = 1
+    session = 'FN'  # Default session
+    
+    if exam_type == 'Internal':
+        internal_input = input("\nWhich Internal Exam? (1/2) [default: 1]: ").strip()
+        if internal_input in ['1', '2']:
+            internal_number = int(internal_input)
+        else:
+            internal_number = 1
+        print(f"✓ Selected: Internal {internal_number} (Morning session)")
+    else:
+        # Get session only for SEM exams
+        session = input("\nEnter session (FN/AN) [default: FN]: ").strip().upper()
+        if session not in ['FN', 'AN']:
+            session = 'FN'
+    
+    # Faculty/Invigilator Management
+    selected_teachers = manage_faculty_selection(teachers_df)
+    
+    # Hall Selection
+    selected_halls = manage_hall_selection(halls_df, total_students, exam_type)
+    
+    # Final Confirmation
+    print("\n" + "=" * 60)
+    print("CONFIGURATION SUMMARY")
+    print("=" * 60)
+    print(f"Year: {year_names[year]} Year")
+    print(f"Exam Type: {exam_type} {internal_number if exam_type == 'Internal' else ''}")
+    print(f"Session: {session}")
+    print(f"Total Students: {total_students}")
+    print(f"Selected Halls: {len(selected_halls)} halls")
+    print(f"Selected Faculty: {len(selected_teachers)} invigilators")
+    print("=" * 60)
+    
+    confirm = input("\nProceed with allocation generation? (y/n): ").strip().lower()
+    if confirm != 'y':
+        print("\n✗ Allocation cancelled")
+        return
+    
+    # Create allocation system with selected halls and teachers
+    system = SeatingAllocationSystem(halls_file, students_file, teachers_file, 
+                                     session=session, exam_type=exam_type, year=year, 
+                                     internal_number=internal_number,
+                                     selected_halls=selected_halls,
+                                     selected_teachers=selected_teachers)
+
+def manage_hall_selection(halls_df, total_students, exam_type):
+    """Interactive hall selection with dynamic capacity tracking"""
+    print("\n" + "=" * 60)
+    print("HALL SELECTION")
+    print("=" * 60)
+    print(f"\nTotal Students: {total_students}")
+    
+    # Calculate effective capacity per hall
+    if exam_type == 'Internal':
+        halls_df['effective_capacity'] = halls_df['capacity'] * 2
+        print("Exam Type: Internal (2 students per bench)")
+    else:
+        halls_df['effective_capacity'] = halls_df['capacity']
+        print("Exam Type: SEM (1 student per bench)")
+    
+    selected_halls = []
+    accumulated_capacity = 0
+    
+    while True:
+        remaining = total_students - accumulated_capacity
+        print("\n" + "-" * 60)
+        print(f"Current Status:")
+        print(f"  Students to accommodate: {total_students}")
+        print(f"  Current capacity: {accumulated_capacity}")
+        print(f"  Remaining: {remaining}")
+        print(f"  Halls selected: {len(selected_halls)}")
+        print("-" * 60)
+        
+        print("\nOptions:")
+        print("  [1] View all available halls")
+        print("  [2] Select halls")
+        print("  [3] Auto-select optimal halls")
+        print("  [4] Remove selected hall")
+        print("  [5] Finish hall selection")
+        print("-" * 60)
+        
+        choice = input("\nEnter choice (1-5): ").strip()
+        
+        if choice == '1':
+            print("\nAvailable Halls:")
+            print(f"{'No':<6} {'Capacity':<10} {'Benches':<10} {'Students':<12} {'Status':<15}")
+            print("-" * 60)
+            for _, hall in halls_df.iterrows():
+                hall_no = hall['hallno']
+                cap = int(hall['capacity'])
+                eff_cap = int(hall['effective_capacity'])
+                status = "✓ SELECTED" if hall_no in selected_halls else "Available"
+                print(f"{hall_no:<6} {cap:<10} {cap:<10} {eff_cap:<12} {status:<15}")
+        
+        elif choice == '2':
+            print("\nSelect Halls (comma-separated hall numbers):")
+            hall_input = input("Hall numbers: ").strip()
+            try:
+                hall_nums = [int(x.strip()) for x in hall_input.split(',')]
+                for hall_no in hall_nums:
+                    if hall_no in halls_df['hallno'].values and hall_no not in selected_halls:
+                        selected_halls.append(hall_no)
+                        cap = int(halls_df[halls_df['hallno'] == hall_no]['effective_capacity'].values[0])
+                        accumulated_capacity += cap
+                        print(f"✓ Added Hall {hall_no} (capacity: {cap})")
+                
+                print(f"\nTotal capacity now: {accumulated_capacity}/{total_students}")
+                if accumulated_capacity >= total_students:
+                    print("✓ Sufficient capacity achieved!")
+            except:
+                print("Invalid input!")
+        
+        elif choice == '3':
+            # Auto-select halls to minimize waste
+            halls_sorted = halls_df.sort_values('effective_capacity').reset_index(drop=True)
+            selected_halls = []
+            accumulated_capacity = 0
+            
+            for _, hall in halls_sorted.iterrows():
+                if accumulated_capacity >= total_students:
+                    break
+                hall_no = hall['hallno']
+                selected_halls.append(hall_no)
+                accumulated_capacity += int(hall['effective_capacity'])
+            
+            print(f"✓ Auto-selected {len(selected_halls)} halls")
+            print(f"  Total capacity: {accumulated_capacity}")
+            print(f"  Halls: {', '.join(map(str, selected_halls))}")
+        
+        elif choice == '4':
+            if not selected_halls:
+                print("No halls selected yet!")
+                continue
+            print("\nSelected Halls:")
+            for i, hall_no in enumerate(selected_halls, 1):
+                cap = int(halls_df[halls_df['hallno'] == hall_no]['effective_capacity'].values[0])
+                print(f"  [{i}] Hall {hall_no} (capacity: {cap})")
+            try:
+                idx = int(input("\nEnter number to remove (0 to cancel): ").strip()) - 1
+                if 0 <= idx < len(selected_halls):
+                    removed_hall = selected_halls.pop(idx)
+                    cap = int(halls_df[halls_df['hallno'] == removed_hall]['effective_capacity'].values[0])
+                    accumulated_capacity -= cap
+                    print(f"✓ Removed Hall {removed_hall}")
+                    print(f"  New capacity: {accumulated_capacity}")
+            except:
+                print("Invalid input!")
+        
+        elif choice == '5':
+            if accumulated_capacity < total_students:
+                print(f"\n⚠ Warning: Insufficient capacity!")
+                print(f"   Need: {total_students}, Have: {accumulated_capacity}")
+                confirm = input("Continue anyway? (y/n): ").strip().lower()
+                if confirm != 'y':
+                    continue
+            print(f"\n✓ {len(selected_halls)} halls selected (capacity: {accumulated_capacity})")
+            break
+        else:
+            print("Invalid choice!")
+    
+    return selected_halls
+
+
 def main():
     """Main execution function"""
     print("\n" + "=" * 60)
@@ -972,9 +1284,55 @@ def main():
         if session not in ['FN', 'AN']:
             session = 'FN'
     
-    # Create allocation system
+    # Load data for interactive management
+    halls_df = pd.read_csv(halls_file)
+    halls_df.columns = halls_df.columns.str.strip()
+    teachers_df = pd.read_csv(teachers_file)
+    teachers_df.columns = teachers_df.columns.str.strip()
+    
+    # Load students to get total count
+    students_df = pd.read_csv(students_file)
+    students_df.columns = students_df.columns.str.strip()
+    total_students = len(students_df)
+    
+    # Interactive Hall Selection FIRST (need to know how many halls before selecting faculty)
+    print("\n" + "=" * 60)
+    print("HALL SELECTION")
+    print("=" * 60)
+    print(f"Total students to allocate: {total_students}")
+    selected_halls = manage_hall_selection(halls_df, total_students, exam_type)
+    
+    # Interactive Faculty Management AFTER (based on number of halls selected)
+    print("\n" + "=" * 60)
+    print("FACULTY MANAGEMENT")
+    print("=" * 60)
+    print(f"Number of halls selected: {len(selected_halls)}")
+    print(f"Minimum faculty required: {len(selected_halls)}")
+    selected_teachers = manage_faculty_selection(teachers_df)
+    
+    # Create allocation system with selected teachers and halls
     system = SeatingAllocationSystem(halls_file, students_file, teachers_file, 
-                                     session=session, exam_type=exam_type, year=year, internal_number=internal_number)
+                                     session=session, exam_type=exam_type, year=year, 
+                                     internal_number=internal_number,
+                                     selected_halls=selected_halls,
+                                     selected_teachers=selected_teachers)
+    
+    # Final confirmation before generating allocation
+    print("\n" + "=" * 60)
+    print("FINAL CONFIRMATION")
+    print("=" * 60)
+    print(f"Year: {year_names[year]} Year")
+    if exam_type == 'Internal':
+        print(f"Exam Type: Internal {internal_number} (Morning session)")
+    else:
+        print(f"Exam Type: {exam_type} ({session} session)")
+    print(f"Selected Halls: {len(selected_halls)}")
+    print(f"Selected Teachers: {len(selected_teachers)}")
+    
+    confirm = input("\nProceed with seating allocation and PDF generation? (yes/no) [default: yes]: ").strip().lower()
+    if confirm not in ['yes', 'y', '']:
+        print("\nAllocation cancelled.")
+        return
     
     if exam_type == 'Internal':
         print(f"\nGenerating seating arrangement for Year {year} - Internal {internal_number} Exam...")

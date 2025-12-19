@@ -9,10 +9,6 @@ from datetime import datetime
 from scheduler import ExamScheduler
 from pdf_generator import generate_schedule_pdf
 import config
-try:
-    from seating_integration import generate_seating_from_schedule
-except Exception:
-    generate_seating_from_schedule = None
 
 def print_header(title):
     """Print formatted header"""
@@ -168,6 +164,115 @@ def print_violations_table(violations):
     
     print("-"*70)
 
+def modify_schedule_interactive(schedule, exam_type, available_dates):
+    """
+    Allow COE to modify schedule dates and sessions interactively
+    
+    Args:
+        schedule: List of scheduled exams
+        exam_type: 'SEMESTER' or 'INTERNAL'
+        available_dates: List of available dates
+        
+    Returns:
+        Modified schedule list
+    """
+    print_header("SCHEDULE MODIFICATION")
+    print("   You can modify exam dates and sessions before generating PDF")
+    
+    while True:
+        print("\n" + "-"*70)
+        print("   Options:")
+        print("   [1] View current schedule")
+        print("   [2] Modify an exam's date/session")
+        print("   [3] Finish and proceed to PDF generation")
+        print("-"*70)
+        
+        choice = input("\n   Enter choice (1-3): ").strip()
+        
+        if choice == '1':
+            # Display current schedule
+            print_header("CURRENT SCHEDULE")
+            print_schedule_table(schedule, exam_type)
+            
+        elif choice == '2':
+            # Modify an exam
+            print("\n" + "="*70)
+            print("MODIFY EXAM SCHEDULE")
+            print("="*70)
+            
+            # Show numbered list of exams
+            print("\nCurrent Exams:")
+            for i, exam in enumerate(schedule, 1):
+                print(f"   [{i}] {exam['subject_code']:<10} {exam['subject_name']:<30} "
+                      f"Dept: {exam['department']:<6} Date: {exam['date']:<12} Session: {exam['session']}")
+            
+            # Get exam to modify
+            try:
+                exam_num = int(input("\n   Enter exam number to modify (or 0 to cancel): ").strip())
+                if exam_num == 0:
+                    continue
+                if exam_num < 1 or exam_num > len(schedule):
+                    print("   Invalid exam number!")
+                    continue
+                    
+                exam_idx = exam_num - 1
+                selected_exam = schedule[exam_idx]
+                
+                print(f"\n   Selected: {selected_exam['subject_code']} - {selected_exam['subject_name']}")
+                print(f"   Current: {selected_exam['date']} ({selected_exam['session']})")
+                
+                # Show available dates
+                print("\n   Available dates:")
+                for i, date in enumerate(available_dates, 1):
+                    date_obj = datetime.strptime(date, '%d.%m.%Y')
+                    day_name = date_obj.strftime('%A')
+                    print(f"   [{i}] {date} ({day_name})")
+                
+                # Get new date
+                date_choice = input("\n   Enter date number (or press Enter to keep current): ").strip()
+                if date_choice:
+                    try:
+                        date_idx = int(date_choice) - 1
+                        if 0 <= date_idx < len(available_dates):
+                            new_date = available_dates[date_idx]
+                            schedule[exam_idx]['date'] = new_date
+                            print(f"   ✓ Date changed to {new_date}")
+                        else:
+                            print("   Invalid date number!")
+                    except ValueError:
+                        print("   Invalid input!")
+                
+                # Get new session
+                if exam_type == 'SEMESTER':
+                    sessions = ['FN', 'AN']
+                else:
+                    sessions = ['FN', 'AN']
+                
+                print(f"\n   Available sessions: {', '.join(sessions)}")
+                session_choice = input(f"   Enter session ({'/'.join(sessions)}) or press Enter to keep current: ").strip().upper()
+                
+                if session_choice in sessions:
+                    schedule[exam_idx]['session'] = session_choice
+                    print(f"   ✓ Session changed to {session_choice}")
+                elif session_choice:
+                    print("   Invalid session!")
+                
+                print(f"\n   Updated: {schedule[exam_idx]['date']} ({schedule[exam_idx]['session']})")
+                
+            except ValueError:
+                print("   Invalid input!")
+            except Exception as e:
+                print(f"   Error: {e}")
+                
+        elif choice == '3':
+            # Confirm and finish
+            print("\n   Modifications complete!")
+            break
+        else:
+            print("   Invalid choice. Please enter 1, 2, or 3.")
+    
+    return schedule
+
 def get_user_input():
     """Get scheduling parameters from user"""
     print_header("EXAM SCHEDULING SYSTEM - Input Parameters")
@@ -304,10 +409,6 @@ def main():
                 year, semester_type, start_date, end_date, holidays
             )
         
-        # Create exam cycle and save
-        cycle_id = scheduler.create_exam_cycle(exam_type, year, start_date, end_date)
-        scheduler.save_schedule_to_db(cycle_id, schedule, violations)
-        
         # Display results
         print_header(f"{exam_type} EXAM SCHEDULE - Year {year}")
         print(f"\n   Total Exams Scheduled: {len(schedule)}")
@@ -321,6 +422,21 @@ def main():
             print_violations_table(violations)
             print("\n   Note: These violations occur due to insufficient time slots.")
             print("   Consider extending the exam period if possible.")
+            
+            # COE Authority to Override Violations
+            print("\n" + "="*70)
+            print("   🔐 COE AUTHORITY - OVERRIDE CONSTRAINTS")
+            print("="*70)
+            override_choice = input("\n   Do you want to proceed with this schedule despite violations? (y/n): ").strip().lower()
+            
+            if override_choice != 'y':
+                print("\n   ❌ Schedule creation cancelled due to constraint violations.")
+                print("   Please adjust the date range or exam parameters and try again.")
+                scheduler.close()
+                return
+            else:
+                print("\n   ⚠️  COE Override: Proceeding with schedule despite violations...")
+                print("   ⚠️  Warning: This schedule violates defined constraints!")
         else:
             print("\n   ✅ All constraints satisfied!")
         
@@ -332,12 +448,38 @@ def main():
             if dept not in dept_summary:
                 dept_summary[dept] = 0
             dept_summary[dept] += 1
-        
+             
         for dept, count in sorted(dept_summary.items()):
             print(f"   {dept}: {count} exams")
         
+        # Ask for confirmation and allow modifications
         print("\n" + "="*70)
-        print(f"   Schedule saved to database (Cycle ID: {cycle_id})")
+        modify_choice = input("\n   Do you want to modify the schedule? (y/n): ").strip().lower()
+        
+        if modify_choice == 'y':
+            # Generate available dates for modification
+            available_dates = scheduler.generate_available_dates(start_date, end_date, holidays)
+            schedule = modify_schedule_interactive(schedule, exam_type, available_dates)
+            
+            # Display updated schedule
+            print_header(f"UPDATED {exam_type} EXAM SCHEDULE - Year {year}")
+            print_schedule_table(schedule, exam_type)
+        
+        # Final confirmation before saving
+        print("\n" + "="*70)
+        final_confirm = input("\n   Confirm and save this schedule? (y/n): ").strip().lower()
+        
+        if final_confirm != 'y':
+            print("\n   Schedule not saved. Exiting...")
+            scheduler.close()
+            return
+        
+        # Create exam cycle and save
+        cycle_id = scheduler.create_exam_cycle(exam_type, year, start_date, end_date)
+        scheduler.save_schedule_to_db(cycle_id, schedule, violations)
+        
+        print("\n" + "="*70)
+        print(f"   ✅ Schedule saved to database (Cycle ID: {cycle_id})")
         print("="*70)
         
         # Generate PDF
@@ -352,21 +494,6 @@ def main():
         except Exception as pdf_error:
             print(f"   ⚠️  PDF generation failed: {pdf_error}")
             print("   Schedule is still saved in database.")
-
-        # Generate seating PDFs via external seating system
-        try:
-            print("\n   Generating seating PDFs (per date/session)...")
-            if generate_seating_from_schedule is None:
-                print("   ℹ️  seating_integration.py not available; skipped seating PDFs.")
-            else:
-                si_results = generate_seating_from_schedule(schedule, exam_type, year)
-                if si_results:
-                    for r in si_results:
-                        print(f"      ✓ {r['date']} {r['session']}: {r['total_students']} students")
-                else:
-                    print("   ℹ️  No seating PDFs generated.")
-        except Exception as e:
-            print(f"   ⚠️  Seating integration failed: {e}")
         
     except ValueError as e:
         print(f"\n   ❌ Error: {e}")
