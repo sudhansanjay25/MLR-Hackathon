@@ -383,22 +383,8 @@ def get_user_input():
         except ValueError:
             print("   Invalid format. Please use DD.MM.YYYY")
     
-    # Holidays
-    print("\n5. Enter Holidays to Exclude:")
-    print("   (Enter dates separated by commas, or press Enter to skip)")
-    print("   Example: 20.12.2025, 25.12.2025")
-    
-    holidays_input = input("   Holidays: ").strip()
+    # Holidays - No longer prompted, defaults to empty list (only Sundays excluded)
     holidays = []
-    
-    if holidays_input:
-        for h in holidays_input.split(','):
-            h = h.strip()
-            try:
-                datetime.strptime(h, '%d.%m.%Y')
-                holidays.append(h)
-            except ValueError:
-                print(f"   Warning: Invalid date '{h}' ignored.")
     
     return exam_type, semester_type, year, start_date, end_date, holidays
 

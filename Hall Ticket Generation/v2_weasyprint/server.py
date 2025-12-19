@@ -11,7 +11,8 @@ import pdfkit
 
 app = Flask(__name__)
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), 'templates')
-DB_PATH = Path(__file__).with_name('students.db')
+# Use integrated database
+DB_PATH = os.path.join(os.path.dirname(__file__), '..', '..', 'Exam Scheduling Algorithm', 'exam_scheduling.db')
 
 # Configure wkhtmltopdf path (update if installed elsewhere)
 WKHTMLTOPDF_PATH = r'C:\Program Files\wkhtmltopdf\bin\wkhtmltopdf.exe'
@@ -37,13 +38,13 @@ def get_local_ip():
 
 
 def fetch_student_and_subjects(reg_no):
-    """Fetch student details and subjects from database"""
+    """Fetch student details and subjects from integrated database (including arrears)"""
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     
-    # Fetch student info
+    # Fetch student info including arrears array
     cur.execute('''
-        SELECT reg_no, name, deg, branch, dob, sem, gender, semtime, regulation 
+        SELECT reg_no, name, degree, branch_full, dob, semester, gender, regulation, year, department, arrears
         FROM students WHERE reg_no=?
     ''', (reg_no,))
     row = cur.fetchone()
@@ -52,33 +53,83 @@ def fetch_student_and_subjects(reg_no):
         conn.close()
         return None
     
+    # Parse arrears JSON array
+    import json
+    arrears_list = json.loads(row[10]) if row[10] else []
+    
+    # Calculate semester time (e.g., "DEC 2025" based on semester)
+    semester_num = row[5]
+    year_num = row[8]
+    # For even semesters, typically Apr-May exams, for odd semesters, Nov-Dec exams
+    if semester_num % 2 == 0:
+        semtime = "APR 2026"
+    else:
+        semtime = "DEC 2025"
+    
     student = {
         'reg_no': row[0],
         'name': row[1],
-        'deg': row[2],
-        'branch': row[3],
-        'dob': row[4],
-        'sem': row[5],
-        'gender': row[6],
-        'semtime': row[7],
-        'regulation': row[8] if len(row) > 8 else '2015'
+        'deg': row[2] if row[2] else 'B.Tech',
+        'branch': row[3] if row[3] else row[9],  # Use branch_full or department
+        'dob': row[4] if row[4] else '01.01.2000',
+        'sem': str(row[5]),
+        'gender': row[6] if row[6] else 'N/A',
+        'semtime': semtime,
+        'regulation': row[7] if row[7] else '2021',
+        'year': row[8],
+        'department': row[9],
+        'arrears': arrears_list  # List of arrear subject codes
     }
     
-    # Fetch subjects
+    # Fetch subjects with schedule dates (current semester + arrears only)
+    # Current semester: subjects student is enrolled in from their current semester
+    # Arrears: subjects from arrears list that have been scheduled
+    
+    # Determine current semester type (ODD or EVEN)
+    current_semester_type = 'EVEN' if semester_num % 2 == 0 else 'ODD'
+    
+    # Get student_id first
+    cur.execute('SELECT student_id FROM students WHERE reg_no = ?', (reg_no,))
+    student_id = cur.fetchone()[0]
+    
     cur.execute('''
-        SELECT sem, date, session, code, name 
-        FROM subjects WHERE reg_no=? ORDER BY sem, code
-    ''', (reg_no,))
-    subjects = [
-        {
-            'sem': r[0],
-            'date': r[1],
-            'session': r[2],
-            'code': r[3],
-            'name': r[4]
-        }
-        for r in cur.fetchall()
-    ]
+        SELECT 
+            sub.subject_code,
+            sub.subject_name,
+            sub.year as subject_year,
+            sub.semester_type,
+            sch.exam_date,
+            sch.session
+        FROM subjects sub
+        JOIN schedules sch ON sub.subject_id = sch.subject_id
+        WHERE (
+            -- Current semester subjects (enrolled + matching current semester)
+            (sub.subject_id IN (
+                SELECT subject_id FROM student_subjects WHERE student_id = ?
+            ) AND sub.semester_type = ?)
+            OR
+            -- Arrear subjects (from arrears list)
+            sub.subject_code IN ({})
+        )
+        ORDER BY sch.exam_date, sub.subject_code
+    '''.format(','.join(['?' for _ in arrears_list])), 
+    (student_id, current_semester_type, *arrears_list))
+    
+    subjects = []
+    for r in cur.fetchall():
+        subject_code = r[0]
+        # Check if this subject is in the arrears list
+        is_arrear = subject_code in arrears_list
+        status = 'ARREAR' if is_arrear else 'REGULAR'
+        
+        subjects.append({
+            'sem': str(r[2]) if r[2] else student['sem'],  # subject year
+            'date': r[4] if r[4] else 'TBA',  # exam_date
+            'session': r[5] if r[5] else 'TBA',  # session
+            'code': subject_code,  # subject_code
+            'name': r[1],  # subject_name
+            'status': status  # REGULAR or ARREAR (from arrears array)
+        })
     
     conn.close()
     return student, subjects
@@ -212,10 +263,11 @@ def verify_student(reg_no):
 
 
 if __name__ == '__main__':
-    if not DB_PATH.exists():
+    if not os.path.exists(DB_PATH):
         print("=" * 60)
         print("ERROR: Database not found!")
-        print(f"Please run: python db_setup.py")
+        print(f"Expected location: {DB_PATH}")
+        print(f"Please ensure exam_scheduling.db exists in the Exam Scheduling Algorithm folder")
         print("=" * 60)
     else:
         ip = get_local_ip()

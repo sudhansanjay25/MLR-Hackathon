@@ -34,18 +34,17 @@ DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'Exam Scheduling Algorit
 
 
 class SeatingAllocationSystem:
-    def __init__(self, halls_file=None, students_file=None, teachers_file=None, session='FN', exam_type='Internal', year=1, internal_number=1, selected_halls=None, selected_teachers=None, use_database=True):
+    def __init__(self, halls_file=None, students_file=None, teachers_file=None, session='FN', exam_type='Internal', year=1, internal_number=1, selected_halls=None, selected_teachers=None, use_database=True, exam_date=None):
         """Initialize the seating allocation system
         
         Args:
             use_database: If True, load data from database. If False, load from CSV files.
+            exam_date: For SEM exams, the specific date+session to allocate seats for (DD.MM.YYYY)
         """
-        # Set exam parameters FIRST before loading data
-        self.session = session  # 'FN' or 'AN'
-        self.exam_type = exam_type  # 'Internal' or 'SEM'
-        self.year = year  # Academic year (1, 2, 3, or 4)
-        self.internal_number = internal_number  # 1 or 2 (only for Internal exams)
-        self.generation_date = datetime.now().strftime('%Y-%m-%d')
+        self.exam_type = exam_type
+        self.exam_date = exam_date
+        self.session = session
+        self.year = year
         
         if use_database:
             # Load data from database
@@ -76,9 +75,15 @@ class SeatingAllocationSystem:
         self.allocations = []
         self.hall_wise_allocations = {}
         self.teacher_assignments = {}
+        self.session = session  # 'FN' or 'AN'
+        self.exam_type = exam_type  # 'Internal' or 'SEM'
+        self.year = year  # Academic year (1, 2, 3, or 4)
+        self.internal_number = internal_number  # 1 or 2 (only for Internal exams)
+        self.generation_date = datetime.now().strftime('%Y-%m-%d')
     
     def _load_from_database(self, year, selected_halls=None, selected_teachers=None):
         """Load data from shared database"""
+        import json
         conn = sqlite3.connect(DB_PATH)
         
         # Load halls data
@@ -89,9 +94,62 @@ class SeatingAllocationSystem:
         if selected_halls:
             self.halls_df = self.halls_df[self.halls_df['hallno'].isin(selected_halls)].reset_index(drop=True)
         
-        # Load students data for specified year (including students with arrears for SEM exams only)
-        if self.exam_type == 'SEM':
-            # For SEM exams, include students with arrears
+        # Load students based on exam type
+        if self.exam_type == 'SEMESTER' and self.exam_date:
+            # NEW: For SEM exams, get students based on scheduled subjects for this date+session
+            students_query = '''
+                SELECT DISTINCT 
+                    s.reg_no as "Register Number", 
+                    s.name as "Name", 
+                    s.department as "Department",
+                    s.year as "Student Year",
+                    s.arrears as "Arrears"
+                FROM students s
+                JOIN student_subjects ss ON s.student_id = ss.student_id
+                JOIN subjects sub ON ss.subject_id = sub.subject_id
+                JOIN schedules sch ON sub.subject_id = sch.subject_id
+                WHERE sch.exam_date = ? AND sch.session = ? AND s.active = 1
+                ORDER BY s.department, s.reg_no
+            '''
+            self.students_df = pd.read_sql_query(students_query, conn, params=(self.exam_date, self.session))
+            
+            # Filter students: include regular students + arrear students (subject_code in arrears array)
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT DISTINCT sub.subject_code
+                FROM schedules sch
+                JOIN subjects sub ON sch.subject_id = sub.subject_id
+                WHERE sch.exam_date = ? AND sch.session = ?
+            ''', (self.exam_date, self.session))
+            
+            scheduled_subjects = [row[0] for row in cursor.fetchall()]
+            
+            # Filter students who have these subjects (regular or arrear)
+            filtered_students = []
+            for _, row in self.students_df.iterrows():
+                arrears = json.loads(row['Arrears']) if row['Arrears'] else []
+                # Include if any scheduled subject is in their arrears array
+                if any(sub_code in arrears for sub_code in scheduled_subjects):
+                    filtered_students.append(row)
+                # Also include regular students (those whose year matches scheduled subjects)
+                else:
+                    # Check if they're regular students for these subjects
+                    cursor.execute('''
+                        SELECT COUNT(*) FROM student_subjects ss
+                        JOIN subjects sub ON ss.subject_id = sub.subject_id
+                        JOIN students st ON ss.student_id = st.student_id
+                        WHERE st.reg_no = ? AND sub.subject_code IN ({})
+                              AND ss.is_arrear = 0
+                    '''.format(','.join('?' * len(scheduled_subjects))), 
+                    (row['Register Number'], *scheduled_subjects))
+                    
+                    if cursor.fetchone()[0] > 0:
+                        filtered_students.append(row)
+            
+            self.students_df = pd.DataFrame(filtered_students)
+            
+        else:
+            # INTERNAL: Use old logic (all year students, no arrears)
             students_query = '''
                 SELECT DISTINCT 
                     s.reg_no as "Register Number", 
@@ -99,26 +157,8 @@ class SeatingAllocationSystem:
                     s.department as "Department",
                     s.year as "Student Year"
                 FROM students s
-                JOIN student_subjects ss ON s.student_id = ss.student_id
-                JOIN subjects sub ON ss.subject_id = sub.subject_id
-                WHERE (sub.year = ? OR (ss.is_arrear = 1 AND sub.year < s.year)) 
-                    AND s.active = 1
-                GROUP BY s.student_id
-                HAVING SUM(CASE WHEN sub.year = ? THEN 1 ELSE 0 END) > 0 
-                    OR SUM(CASE WHEN ss.is_arrear = 1 AND sub.year = ? THEN 1 ELSE 0 END) > 0
+                WHERE s.year = ? AND s.active = 1
                 ORDER BY s.department, s.reg_no
-            '''
-            self.students_df = pd.read_sql_query(students_query, conn, params=(year, year, year))
-        else:
-            # For INTERNAL exams, only include regular students of that year
-            students_query = '''
-                SELECT reg_no as "Register Number", 
-                       name as "Name", 
-                       department as "Department",
-                       year as "Student Year"
-                FROM students 
-                WHERE year = ? AND active = 1
-                ORDER BY department, reg_no
             '''
             self.students_df = pd.read_sql_query(students_query, conn, params=(year,))
         
@@ -178,7 +218,7 @@ class SeatingAllocationSystem:
         # Optimize hall selection to minimize waste
         optimal_halls = self.optimize_hall_selection()
         
-        if self.exam_type == 'SEM':
+        if self.exam_type in ['SEM', 'SEMESTER']:
             # Semester exam: Linear allocation, 1 student per bench
             allocations = self._allocate_sem_linear_optimized(optimal_halls)
         else:
@@ -248,12 +288,15 @@ class SeatingAllocationSystem:
             
             student = dept_groups[selected_dept].iloc[dept_pointers[selected_dept]]
             
+            # For SEM exams, each student gets their own bench
+            # Seat numbers should be unique within each hall
             allocations.append({
                 'Hall No': hall_no,
                 'Seat No': current_seat_in_hall,
                 'Register Number': student['Register Number'],
                 'Name': student['Name'],
-                'Department': student['Department']
+                'Department': student['Department'],
+                'Bench Number': current_seat_in_hall  # Same as seat for SEM
             })
             
             dept_pointers[selected_dept] += 1
@@ -538,7 +581,7 @@ class SeatingAllocationSystem:
         hall_data = self.hall_wise_allocations[hall_no]
         hall_capacity = self.halls_df[self.halls_df['hallno'] == hall_no]['capacity'].values[0]
         
-        if self.exam_type == 'SEM':
+        if self.exam_type in ['SEM', 'SEMESTER']:
             # Semester Exam: 1 student per bench
             students = hall_data['Register Number'].tolist()
             num_rows = int(np.ceil(hall_capacity / num_cols))
@@ -628,9 +671,15 @@ class SeatingAllocationSystem:
                 ha='center', fontsize=14, fontweight='bold')
         
         # Add date, session, and hall info
-        from datetime import date
-        today = date.today().strftime('%d-%m-%Y')
-        fig.text(0.1, 0.82, f'Date:{today}', fontsize=10)
+        # Use exam_date for SEM exams, current date for Internal exams
+        if self.exam_type in ['SEM', 'SEMESTER'] and self.exam_date:
+            # Convert from DD.MM.YYYY to DD-MM-YYYY format
+            display_date = self.exam_date.replace('.', '-')
+        else:
+            from datetime import date
+            display_date = date.today().strftime('%d-%m-%Y')
+        
+        fig.text(0.1, 0.82, f'Date:{display_date}', fontsize=10)
         if self.exam_type == 'Internal':
             fig.text(0.5, 0.82, f'Session: Morning', ha='center', fontsize=10)
         else:
@@ -641,7 +690,7 @@ class SeatingAllocationSystem:
         col_headers = [f'column {i+1}' for i in range(num_cols)]
         
         # Prepare table data based on exam type
-        if self.exam_type == 'SEM':
+        if self.exam_type in ['SEM', 'SEMESTER']:
             # Semester Exam: Simple grid with one student per cell
             table_data = [col_headers]
             for row_idx, row in enumerate(layout):
@@ -809,7 +858,14 @@ class SeatingAllocationSystem:
         elements.append(Paragraph("Hyderabad - 43", sub_header_style))
         elements.append(Paragraph("[An Autonomous Institution]", italic_style))
         elements.append(Paragraph("SEATING ARRANGEMENT - FACULTY SUMMARY", title_style))
-        elements.append(Paragraph(f"Date: {self.generation_date} | Session: {self.session}", sub_header_style))
+        
+        # Use exam_date for SEM exams, generation_date for Internal exams
+        if self.exam_type in ['SEM', 'SEMESTER'] and self.exam_date:
+            display_date = self.exam_date.replace('.', '-')
+        else:
+            display_date = self.generation_date
+        
+        elements.append(Paragraph(f"Date: {display_date} | Session: {self.session}", sub_header_style))
         elements.append(Spacer(1, 0.3*inch))
         
         # Overall Statistics
@@ -1029,6 +1085,197 @@ class SeatingAllocationSystem:
             allocated = len(self.allocations[self.allocations['Hall No'] == hall_no])
             utilization = (allocated / hall_capacity) * 100
             print(f"  {hall_no}: {allocated:2d}/{hall_capacity:2d} seats ({utilization:5.1f}% utilized)")
+
+    def save_allocation_to_db(self, cycle_id=None):
+        """Save seating allocation to database for review
+        
+        Args:
+            cycle_id: Exam cycle ID (optional, fetched from schedules if not provided)
+            
+        Returns:
+            int: Number of records saved
+        """
+        if not hasattr(self, 'allocations') or self.allocations.empty:
+            print("❌ No allocation to save. Run allocation first.")
+            return 0
+        
+        if not self.exam_date or not self.session:
+            print("❌ Cannot save allocation: exam_date and session are required for SEMESTER exams")
+            return 0
+        
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        try:
+            # Get cycle_id from schedules if not provided
+            if cycle_id is None and self.exam_date:
+                cursor.execute('''
+                    SELECT cycle_id 
+                    FROM schedules 
+                    WHERE exam_date = ? AND session = ?
+                    LIMIT 1
+                ''', (self.exam_date, self.session))
+                result = cursor.fetchone()
+                if result:
+                    cycle_id = result[0]
+            
+            # Delete existing allocations for this date+session (if re-running)
+            cursor.execute('''
+                DELETE FROM seating_allocations 
+                WHERE exam_date = ? AND session = ?
+            ''', (self.exam_date, self.session))
+            
+            # Prepare data for insertion
+            records_saved = 0
+            for _, row in self.allocations.iterrows():
+                # Get hall_id from hall name
+                cursor.execute('SELECT hall_id FROM halls WHERE hall_name = ?', (row['Hall No'],))
+                hall_result = cursor.fetchone()
+                if not hall_result:
+                    print(f"⚠️ Warning: Hall {row['Hall No']} not found in database")
+                    continue
+                hall_id = hall_result[0]
+                
+                # Get student_id from register number
+                cursor.execute('SELECT student_id FROM students WHERE reg_no = ?', (row['Register Number'],))
+                student_result = cursor.fetchone()
+                if not student_result:
+                    print(f"⚠️ Warning: Student {row['Register Number']} not found in database")
+                    continue
+                student_id = student_result[0]
+                
+                # Insert allocation record
+                cursor.execute('''
+                    INSERT INTO seating_allocations (
+                        cycle_id, exam_date, session, hall_id, hall_name,
+                        student_id, reg_no, student_name, department,
+                        bench_number, seat_no, position, exam_type
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    cycle_id, self.exam_date, self.session, hall_id, row['Hall No'],
+                    student_id, row['Register Number'], row['Name'], row['Department'],
+                    row.get('Bench Number', 0), row['Seat No'], 
+                    row.get('Position', 'N/A'), self.exam_type
+                ))
+                records_saved += 1
+            
+            conn.commit()
+            print(f"\n✅ Saved {records_saved} seating allocations to database")
+            print(f"   Exam Date: {self.exam_date} {self.session}")
+            if cycle_id:
+                print(f"   Cycle ID: {cycle_id}")
+            
+            return records_saved
+            
+        except Exception as e:
+            conn.rollback()
+            print(f"❌ Error saving allocation: {e}")
+            import traceback
+            traceback.print_exc()
+            return 0
+        finally:
+            conn.close()
+    
+    @staticmethod
+    def get_allocation_from_db(exam_date=None, session=None, cycle_id=None):
+        """Retrieve seating allocation from database for review
+        
+        Args:
+            exam_date: Exam date (DD.MM.YYYY)
+            session: Session (FN/AN)
+            cycle_id: Exam cycle ID (alternative to date+session)
+            
+        Returns:
+            pd.DataFrame: Allocation data
+        """
+        conn = sqlite3.connect(DB_PATH)
+        
+        try:
+            if exam_date and session:
+                query = '''
+                    SELECT 
+                        allocation_id, cycle_id, exam_date, session,
+                        hall_name, seat_no, reg_no, student_name, 
+                        department, bench_number, exam_type, allocation_date
+                    FROM seating_allocations
+                    WHERE exam_date = ? AND session = ?
+                    ORDER BY hall_name, bench_number, seat_no
+                '''
+                df = pd.read_sql_query(query, conn, params=(exam_date, session))
+                
+            elif cycle_id:
+                query = '''
+                    SELECT 
+                        allocation_id, cycle_id, exam_date, session,
+                        hall_name, seat_no, reg_no, student_name, 
+                        department, bench_number, exam_type, allocation_date
+                    FROM seating_allocations
+                    WHERE cycle_id = ?
+                    ORDER BY exam_date, session, hall_name, bench_number, seat_no
+                '''
+                df = pd.read_sql_query(query, conn, params=(cycle_id,))
+            else:
+                print("❌ Must provide either (exam_date + session) or cycle_id")
+                return pd.DataFrame()
+            
+            if df.empty:
+                print(f"⚠️ No allocation found for the specified criteria")
+            else:
+                print(f"✅ Retrieved {len(df)} seating records")
+                if not df.empty:
+                    print(f"   Exam: {df['exam_date'].iloc[0]} {df['session'].iloc[0]}")
+                    print(f"   Halls: {df['hall_name'].nunique()}")
+                    print(f"   Students: {df['reg_no'].nunique()}")
+                    print(f"   Departments: {', '.join(df['department'].unique())}")
+            
+            return df
+            
+        except Exception as e:
+            print(f"❌ Error retrieving allocation: {e}")
+            import traceback
+            traceback.print_exc()
+            return pd.DataFrame()
+        finally:
+            conn.close()
+    
+    @staticmethod
+    def get_available_allocations():
+        """Get list of all saved seating allocations
+        
+        Returns:
+            pd.DataFrame: Summary of all allocations
+        """
+        conn = sqlite3.connect(DB_PATH)
+        
+        try:
+            query = '''
+                SELECT 
+                    exam_date, session, cycle_id, exam_type,
+                    COUNT(*) as student_count,
+                    COUNT(DISTINCT hall_id) as hall_count,
+                    COUNT(DISTINCT department) as dept_count,
+                    MIN(allocation_date) as created_at
+                FROM seating_allocations
+                GROUP BY exam_date, session, cycle_id, exam_type
+                ORDER BY exam_date, session
+            '''
+            df = pd.read_sql_query(query, conn)
+            
+            if df.empty:
+                print("⚠️ No seating allocations found in database")
+            else:
+                print(f"\n📋 Found {len(df)} seating allocation(s):")
+                for _, row in df.iterrows():
+                    print(f"\n   {row['exam_date']} {row['session']} (Cycle: {row['cycle_id']})")
+                    print(f"   └─ {row['student_count']} students, {row['hall_count']} halls, {row['dept_count']} departments")
+            
+            return df
+            
+        except Exception as e:
+            print(f"❌ Error retrieving allocations: {e}")
+            return pd.DataFrame()
+        finally:
+            conn.close()
 
 
 def manage_faculty_selection(teachers_df):
@@ -1368,22 +1615,13 @@ def manage_hall_selection(halls_df, total_students, exam_type):
     return selected_halls
 
 
-def main():
-    """Main execution function"""
+def main_internal_exam():
+    """Handle Internal exam allocation (existing workflow)"""
     print("\n" + "=" * 60)
-    print("SEATING ARRANGEMENT ALLOCATION SYSTEM")
-    print("Academic Year 2024-25")
+    print("INTERNAL EXAM - SEATING ALLOCATION")
     print("=" * 60)
     
-    # Check if database exists
-    if not os.path.exists(DB_PATH):
-        print(f"\nERROR: Database not found!")
-        print(f"Expected location: {DB_PATH}")
-        print(f"\nPlease run: python integrated_db_setup.py")
-        print(f"from the 'Exam Scheduling Algorithm' folder first.")
-        return
-    
-    # Get year selection from user
+    # Get year selection
     print("\nSelect Year:")
     print("  1. First Year")
     print("  2. Second Year")
@@ -1397,147 +1635,375 @@ def main():
         year = 1
     
     year_names = {1: "First", 2: "Second", 3: "Third", 4: "Fourth"}
-    print(f"\n✓ Loading {year_names[year]} Year students from database")
+    print(f"\n✓ {year_names[year]} Year selected")
     
-    # Get exam type from user
-    print("\nExam Types:")
-    print("  1. Internal - Continuous Internal Assessment (2 students per bench)")
-    print("  2. SEM - End Semester Examination (1 student per bench)")
-    exam_type_input = input("\nEnter exam type (Internal/SEM) [default: Internal]: ").strip().upper()
-    if exam_type_input not in ['INTERNAL', 'SEM']:
-        exam_type = 'Internal'
+    # Get internal exam number
+    internal_input = input("\nWhich Internal Exam? (1/2) [default: 1]: ").strip()
+    if internal_input in ['1', '2']:
+        internal_number = int(internal_input)
     else:
-        exam_type = 'Internal' if exam_type_input == 'INTERNAL' else 'SEM'
+        internal_number = 1
     
-    # Get internal exam number if Internal exam is selected
-    internal_number = 1
-    session = 'FN'  # Default session
+    print(f"✓ Internal {internal_number} selected (Morning session)")
     
-    if exam_type == 'Internal':
-        internal_input = input("\nWhich Internal Exam? (1/2) [default: 1]: ").strip()
-        if internal_input in ['1', '2']:
-            internal_number = int(internal_input)
-        else:
-            internal_number = 1
-        print(f"Selected: Internal {internal_number} (Morning session)")
-    else:
-        # Get session only for SEM exams
-        session = input("\nEnter session (FN/AN) [default: FN]: ").strip().upper()
-        if session not in ['FN', 'AN']:
-            session = 'FN'
-    
-    # Load data from database for interactive management
+    # Load data from database
     conn = sqlite3.connect(DB_PATH)
-    
     halls_df = pd.read_sql_query("SELECT hall_name as hallno, capacity, columns FROM halls WHERE active = 1", conn)
     teachers_df = pd.read_sql_query("SELECT teacher_name as Name, department as Department FROM teachers WHERE active = 1", conn)
     
-    # Get student count for the selected year (including students with arrears for SEM only)
+    # Get student count
     cursor = conn.cursor()
-    if exam_type == 'SEM':
-        # For SEM exams, include students with arrears
-        cursor.execute('''
-            SELECT COUNT(DISTINCT s.student_id)
-            FROM students s
-            JOIN student_subjects ss ON s.student_id = ss.student_id
-            JOIN subjects sub ON ss.subject_id = sub.subject_id
-            WHERE (sub.year = ? OR (ss.is_arrear = 1 AND sub.year < s.year))
-                AND s.active = 1
-            GROUP BY s.student_id
-            HAVING SUM(CASE WHEN sub.year = ? THEN 1 ELSE 0 END) > 0 
-                OR SUM(CASE WHEN ss.is_arrear = 1 AND sub.year = ? THEN 1 ELSE 0 END) > 0
-        ''', (year, year, year))
-        result = cursor.fetchall()
-        total_students = len(result)
-    else:
-        # For INTERNAL exams, only count regular students
-        cursor.execute("SELECT COUNT(*) FROM students WHERE year = ? AND active = 1", (year,))
-        total_students = cursor.fetchone()[0]
+    cursor.execute('SELECT COUNT(*) FROM students WHERE year = ? AND active = 1', (year,))
+    total_students = cursor.fetchone()[0]
     conn.close()
     
-    # Interactive Hall Selection FIRST (need to know how many halls before selecting faculty)
+    print(f"\n✓ Total students: {total_students}")
+    
+    # Hall Selection
     print("\n" + "=" * 60)
     print("HALL SELECTION")
     print("=" * 60)
-    print(f"Total students to allocate: {total_students}")
-    selected_halls = manage_hall_selection(halls_df, total_students, exam_type)
+    selected_halls = manage_hall_selection(halls_df, total_students, 'Internal')
     
-    # Interactive Faculty Management AFTER (based on number of halls selected)
+    # Faculty Management
     print("\n" + "=" * 60)
     print("FACULTY MANAGEMENT")
     print("=" * 60)
-    print(f"Number of halls selected: {len(selected_halls)}")
+    print(f"Halls selected: {len(selected_halls)}")
     print(f"Minimum faculty required: {len(selected_halls)}")
     selected_teachers = manage_faculty_selection(teachers_df)
     
-    # Create allocation system using database (not CSV files)
+    # Create allocation system
     system = SeatingAllocationSystem(
         use_database=True,
-        session=session, 
-        exam_type=exam_type, 
-        year=year, 
+        session='FN',
+        exam_type='Internal',
+        year=year,
         internal_number=internal_number,
         selected_halls=selected_halls,
         selected_teachers=selected_teachers
     )
     
-    # Final confirmation before generating allocation
+    # Final confirmation
     print("\n" + "=" * 60)
     print("FINAL CONFIRMATION")
     print("=" * 60)
     print(f"Year: {year_names[year]} Year")
-    if exam_type == 'Internal':
-        print(f"Exam Type: Internal {internal_number} (Morning session)")
-    else:
-        print(f"Exam Type: {exam_type} ({session} session)")
+    print(f"Exam Type: Internal {internal_number} (Morning session)")
+    print(f"Mode: 2 students per bench")
     print(f"Selected Halls: {len(selected_halls)}")
     print(f"Selected Teachers: {len(selected_teachers)}")
     
-    confirm = input("\nProceed with seating allocation and PDF generation? (yes/no) [default: yes]: ").strip().lower()
+    confirm = input("\nProceed with allocation and PDF generation? (yes/no) [default: yes]: ").strip().lower()
     if confirm not in ['yes', 'y', '']:
-        print("\nAllocation cancelled.")
+        print("\n✗ Allocation cancelled")
         return
     
-    if exam_type == 'Internal':
-        print(f"\nGenerating seating arrangement for Year {year} - Internal {internal_number} Exam...")
-    else:
-        print(f"\nGenerating seating arrangement for Year {year} - {exam_type} Exam ({session} session)...")
-    if exam_type == 'Internal':
-        print("Mode: 2 students per bench (randomized, min 2 depts/hall)")
-    else:
-        print("Mode: 1 student per bench (randomized, min 2 depts/hall)")
-    
-    # Perform allocation with randomization
+    # Generate allocation
+    print(f"\nGenerating seating arrangement for Year {year} - Internal {internal_number}...")
     allocations = system.allocate_seats_mixed_department()
-    
-    # Assign teachers to halls
     system.assign_teachers()
     
-    # Generate PDF reports only (no Excel)
+    # Generate PDFs
     student_pdf = system.generate_student_pdf()
     faculty_pdf = system.generate_faculty_pdf()
-    
-    # Print statistics
     system.print_statistics()
     
     print("\n" + "=" * 60)
     print("ALLOCATION COMPLETE!")
     print("=" * 60)
-    print(f"\nYear: {year_names[year]} Year")
-    if exam_type == 'Internal':
-        print(f"Exam Type: Internal {internal_number} (Morning session)")
-    else:
-        print(f"Exam Type: {exam_type}")
-        print(f"Session: {session}")
     print(f"\nGenerated Files:")
-    print(f"  1. Student PDF: {student_pdf}")
-    print(f"  2. Faculty PDF: {faculty_pdf}")
-    print("\nPDF Files contain:")
-    print("  • Student PDF: Visual hall layouts (only non-empty halls)")
-    print("  • Faculty PDF: Summary table with teacher assignments")
-    print("  • Randomized seating with department diversity")
-    print("  • Minimum 2 departments per hall")
+    print(f"  • Student PDF: {student_pdf}")
+    print(f"  • Faculty PDF: {faculty_pdf}")
     print("\n")
+
+
+def main_sem_exam():
+    """Handle SEM exam allocation (new hierarchical workflow)"""
+    print("\n" + "=" * 60)
+    print("SEMESTER EXAM - SEATING ALLOCATION")
+    print("=" * 60)
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Step 1: Get Year and Semester
+    print("\nStep 1: Select Year and Semester")
+    print("=" * 40)
+    print("Years:")
+    print("  1. First Year")
+    print("  2. Second Year")
+    print("  3. Third Year")
+    print("  4. Fourth Year")
+    year_input = input("\nEnter year (1/2/3/4): ").strip()
+    
+    if year_input not in ['1', '2', '3', '4']:
+        print("❌ Invalid year selection")
+        conn.close()
+        return
+    
+    year = int(year_input)
+    year_names = {1: "First", 2: "Second", 3: "Third", 4: "Fourth"}
+    
+    print("\nSemesters:")
+    print("  1. ODD Semester")
+    print("  2. EVEN Semester")
+    sem_input = input("\nEnter semester (1/2): ").strip()
+    
+    if sem_input not in ['1', '2']:
+        print("❌ Invalid semester selection")
+        conn.close()
+        return
+    
+    semester = 'ODD' if sem_input == '1' else 'EVEN'
+    
+    print(f"\n✓ Selected: {year_names[year]} Year, {semester} Semester")
+    
+    # Step 2: Get available dates and sessions from schedules
+    print("\n" + "=" * 60)
+    print("Step 2: Select Date and Session")
+    print("=" * 60)
+    
+    # Query schedules for this year (all semesters - students can have arrears from both)
+    cursor.execute('''
+        SELECT DISTINCT sch.exam_date, sch.session
+        FROM schedules sch
+        JOIN subjects sub ON sch.subject_id = sub.subject_id
+        WHERE sub.year = ?
+        ORDER BY sch.exam_date, sch.session
+    ''', (year,))
+    
+    available_slots = cursor.fetchall()
+    
+    if not available_slots:
+        print(f"\n❌ No exam schedule found for Year {year}, {semester} semester")
+        print(f"\nPlease run the scheduler first to create exam schedule.")
+        conn.close()
+        return
+    
+    print(f"\nAvailable Exam Dates and Sessions:")
+    print("-" * 40)
+    for idx, (exam_date, session) in enumerate(available_slots, 1):
+        # Get subject count for this slot (all semesters)
+        cursor.execute('''
+            SELECT COUNT(DISTINCT sub.subject_id)
+            FROM schedules sch
+            JOIN subjects sub ON sch.subject_id = sub.subject_id
+            WHERE sub.year = ?
+                AND sch.exam_date = ? AND sch.session = ?
+        ''', (year, exam_date, session))
+        subject_count = cursor.fetchone()[0]
+        
+        print(f"  {idx}. {exam_date} - {session} ({subject_count} subjects)")
+    
+    slot_input = input(f"\nSelect slot (1-{len(available_slots)}): ").strip()
+    
+    try:
+        slot_idx = int(slot_input) - 1
+        if slot_idx < 0 or slot_idx >= len(available_slots):
+            raise ValueError
+        
+        exam_date, session = available_slots[slot_idx]
+    except:
+        print("❌ Invalid slot selection")
+        conn.close()
+        return
+    
+    print(f"\n✓ Selected: {exam_date} - {session}")
+    
+    # Step 3: Show subjects scheduled for this date+session
+    print("\n" + "=" * 60)
+    print("Step 3: Subjects Scheduled")
+    print("=" * 60)
+    
+    cursor.execute('''
+        SELECT DISTINCT sub.subject_code, sub.subject_name
+        FROM schedules sch
+        JOIN subjects sub ON sch.subject_id = sub.subject_id
+        WHERE sub.year = ?
+            AND sch.exam_date = ? AND sch.session = ?
+        ORDER BY sub.subject_code
+    ''', (year, exam_date, session))
+    
+    scheduled_subjects = cursor.fetchall()
+    
+    print("\nSubjects on this date and session:")
+    for subject_code, subject_name in scheduled_subjects:
+        print(f"  • {subject_code} - {subject_name}")
+    
+    # Step 4: Collect students (regular + arrear)
+    print("\n" + "=" * 60)
+    print("Step 4: Collecting Students")
+    print("=" * 60)
+    
+    # Get subject IDs for scheduled subjects
+    subject_codes = [sc[0] for sc in scheduled_subjects]
+    placeholders = ','.join(['?' for _ in subject_codes])
+    
+    # Query: Regular students (enrolled in these subjects)
+    cursor.execute(f'''
+        SELECT DISTINCT s.student_id, s.reg_no, s.name, s.department, s.year
+        FROM students s
+        JOIN student_subjects ss ON s.student_id = ss.student_id
+        JOIN subjects sub ON ss.subject_id = sub.subject_id
+        WHERE sub.subject_code IN ({placeholders})
+            AND s.active = 1
+            AND ss.is_arrear = 0
+        ORDER BY s.department, s.reg_no
+    ''', subject_codes)
+    
+    regular_students = cursor.fetchall()
+    
+    # Query: Arrear students (have arrears in these subjects)
+    cursor.execute(f'''
+        SELECT DISTINCT s.student_id, s.reg_no, s.name, s.department, s.year, s.arrears
+        FROM students s
+        WHERE s.active = 1 AND s.arrears IS NOT NULL
+    ''')
+    
+    all_students_with_arrears = cursor.fetchall()
+    arrear_students = []
+    
+    for student_id, reg_no, name, dept, student_year, arrears_json in all_students_with_arrears:
+        if arrears_json:
+            try:
+                import json
+                arrears_list = json.loads(arrears_json)
+                # Check if any scheduled subject is in arrears
+                if any(sc in arrears_list for sc in subject_codes):
+                    arrear_students.append((student_id, reg_no, name, dept, student_year))
+            except:
+                pass
+    
+    # Combine regular + arrear students
+    all_student_data = list(regular_students) + arrear_students
+    # Remove duplicates by student_id
+    unique_students = {}
+    for student_id, reg_no, name, dept, student_year in all_student_data:
+        if student_id not in unique_students:
+            unique_students[student_id] = (reg_no, name, dept, student_year)
+    
+    total_students = len(unique_students)
+    
+    print(f"\n✓ Regular students: {len(regular_students)}")
+    print(f"✓ Arrear students: {len(arrear_students)}")
+    print(f"✓ Total students: {total_students}")
+    
+    if total_students == 0:
+        print("\n❌ No students found for this exam slot")
+        conn.close()
+        return
+    
+    # Step 5: Hall and Faculty Selection
+    halls_df = pd.read_sql_query("SELECT hall_name as hallno, capacity, columns FROM halls WHERE active = 1", conn)
+    teachers_df = pd.read_sql_query("SELECT teacher_name as Name, department as Department FROM teachers WHERE active = 1", conn)
+    
+    print("\n" + "=" * 60)
+    print("Step 5: Hall Selection")
+    print("=" * 60)
+    selected_halls = manage_hall_selection(halls_df, total_students, 'SEMESTER')
+    
+    print("\n" + "=" * 60)
+    print("Step 6: Faculty Management")
+    print("=" * 60)
+    print(f"Halls selected: {len(selected_halls)}")
+    print(f"Minimum faculty required: {len(selected_halls)}")
+    selected_teachers = manage_faculty_selection(teachers_df)
+    
+    conn.close()
+    
+    # Step 6: Create allocation system with exam_date
+    print("\n" + "=" * 60)
+    print("FINAL CONFIRMATION")
+    print("=" * 60)
+    print(f"Year: {year_names[year]} Year")
+    print(f"Semester: {semester}")
+    print(f"Exam Date: {exam_date}")
+    print(f"Session: {session}")
+    print(f"Subjects: {len(scheduled_subjects)}")
+    print(f"Total Students: {total_students}")
+    print(f"Mode: 1 student per bench")
+    print(f"Selected Halls: {len(selected_halls)}")
+    print(f"Selected Teachers: {len(selected_teachers)}")
+    
+    confirm = input("\nProceed with allocation and PDF generation? (yes/no) [default: yes]: ").strip().lower()
+    if confirm not in ['yes', 'y', '']:
+        print("\n✗ Allocation cancelled")
+        return
+    
+    # Create allocation system
+    system = SeatingAllocationSystem(
+        use_database=True,
+        session=session,
+        exam_type='SEMESTER',
+        year=year,
+        exam_date=exam_date,
+        selected_halls=selected_halls,
+        selected_teachers=selected_teachers
+    )
+    
+    # Generate allocation
+    print(f"\nGenerating seating arrangement for {exam_date} {session}...")
+    allocations = system.allocate_seats_mixed_department()
+    system.assign_teachers()
+    
+    # Save to database
+    print("\nSaving allocation to database...")
+    records_saved = system.save_allocation_to_db()
+    
+    # Generate PDFs
+    student_pdf = system.generate_student_pdf()
+    faculty_pdf = system.generate_faculty_pdf()
+    system.print_statistics()
+    
+    print("\n" + "=" * 60)
+    print("ALLOCATION COMPLETE!")
+    print("=" * 60)
+    print(f"\n✓ Saved {records_saved} seat allocations to database")
+    print(f"\nGenerated Files:")
+    print(f"  • Student PDF: {student_pdf}")
+    print(f"  • Faculty PDF: {faculty_pdf}")
+    print("\nReview allocation: python review_seating_allocations.py")
+    print("\n")
+
+
+def main():
+    """Main execution function"""
+    print("\n" + "=" * 60)
+    print("SEATING ARRANGEMENT ALLOCATION SYSTEM")
+    print("Academic Year 2024-25")
+    print("=" * 60)
+    
+    # Check if database exists
+    if not os.path.exists(DB_PATH):
+        print(f"\n❌ ERROR: Database not found!")
+        print(f"Expected location: {DB_PATH}")
+        print(f"\nPlease run: python integrated_db_setup.py")
+        print(f"from the 'Exam Scheduling Algorithm' folder first.")
+        return
+    
+    # Step 1: Ask exam type
+    print("\n" + "=" * 60)
+    print("SELECT EXAM TYPE")
+    print("=" * 60)
+    print("\n1. Internal Exam")
+    print("   • Continuous Internal Assessment")
+    print("   • 2 students per bench")
+    print("   • Fixed year-based allocation")
+    print("\n2. SEM Exam")
+    print("   • End Semester Examination")
+    print("   • 1 student per bench")
+    print("   • Schedule-based allocation (includes arrear students)")
+    
+    exam_type_input = input("\nSelect exam type (1/2): ").strip()
+    
+    if exam_type_input == '1':
+        main_internal_exam()
+    elif exam_type_input == '2':
+        main_sem_exam()
+    else:
+        print("\n❌ Invalid selection")
+        return
 
 
 if __name__ == "__main__":

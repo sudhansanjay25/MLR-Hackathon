@@ -184,7 +184,7 @@ def populate_mock_data(conn):
     ''', subjects_data)
     
     conn.commit()
-    print("✅ Database created and populated with mock data")
+    print("Database created and populated with mock data")
     print(f"   - {len(students_data)} students added")
     print(f"   - {len(subjects_data)} subjects added")
 
@@ -241,4 +241,4 @@ if __name__ == "__main__":
     populate_mock_data(conn)
     print_database_summary(conn)
     conn.close()
-    print("\n✅ Database setup complete! File: exam_scheduling.db")
+    print("\nDatabase setup complete! File: exam_scheduling.db")

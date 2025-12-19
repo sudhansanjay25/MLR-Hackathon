@@ -207,11 +207,12 @@
     <table class="subjects-table">
         <thead>
             <tr>
-                <th style="width: 10%;">Sem</th>
-                <th style="width: 15%;">Date</th>
-                <th style="width: 12%;">Session</th>
-                <th style="width: 18%;">Subject Code</th>
-                <th style="width: 45%;">Subject Name</th>
+                <th style="width: 8%;">Year</th>
+                <th style="width: 14%;">Date</th>
+                <th style="width: 10%;">Session</th>
+                <th style="width: 16%;">Subject Code</th>
+                <th style="width: 40%;">Subject Name</th>
+                <th style="width: 12%;">Status</th>
             </tr>
         </thead>
         <tbody>
@@ -222,6 +223,7 @@
                 <td>{{ subject.session }}</td>
                 <td>{{ subject.code }}</td>
                 <td>{{ subject.name }}</td>
+                <td style="font-weight: bold;">{{ subject.status }}</td>
             </tr>
             {% endfor %}
         </tbody>

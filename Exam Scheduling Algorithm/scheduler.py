@@ -54,6 +54,7 @@ class ExamScheduler:
     def get_subjects_for_year(self, year: int, exam_type: str, semester_type: str) -> List[Dict]:
         """
         Fetch subjects for given year, exam type, and semester type
+        Includes both regular semester subjects AND opposite semester subjects with arrears
         
         Args:
             year: Year group (1-4)
@@ -61,18 +62,55 @@ class ExamScheduler:
             semester_type: 'ODD' or 'EVEN'
             
         Returns:
-            List of subject dictionaries
+            List of subject dictionaries (includes arrear subjects for SEMESTER exams)
         """
-        query = '''
-        SELECT subject_id, subject_code, subject_name, department, 
-               year, semester_type, subject_type, exam_type, student_count
-        FROM subjects
-        WHERE year = ? AND semester_type = ? AND (exam_type = ? OR exam_type = 'BOTH')
-        ORDER BY subject_type DESC, department, subject_code
-        '''
-        
-        self.cursor.execute(query, (year, semester_type, exam_type))
-        rows = self.cursor.fetchall()
+        # For SEMESTER exams, include arrear subjects from opposite semester
+        if exam_type == 'SEMESTER':
+            opposite_semester = 'EVEN' if semester_type == 'ODD' else 'ODD'
+            
+            # Get regular subjects for current semester
+            query_regular = '''
+            SELECT subject_id, subject_code, subject_name, department, 
+                   year, semester_type, subject_type, exam_type, student_count,
+                   'REGULAR' as subject_track
+            FROM subjects
+            WHERE year = ? AND semester_type = ? AND (exam_type = ? OR exam_type = 'BOTH')
+            '''
+            
+            # Get arrear subjects from opposite semester (only if students have arrears)
+            query_arrear = '''
+            SELECT DISTINCT s.subject_id, s.subject_code, s.subject_name, s.department,
+                   s.year, s.semester_type, s.subject_type, s.exam_type,
+                   COUNT(DISTINCT ss.student_id) as student_count,
+                   'ARREAR' as subject_track
+            FROM subjects s
+            JOIN student_subjects ss ON s.subject_id = ss.subject_id
+            WHERE s.year = ? AND s.semester_type = ? 
+                  AND (s.exam_type = ? OR s.exam_type = 'BOTH')
+                  AND ss.is_arrear = 1
+            GROUP BY s.subject_id
+            HAVING student_count > 0
+            '''
+            
+            # Fetch both regular and arrear subjects
+            self.cursor.execute(query_regular, (year, semester_type, exam_type))
+            rows = self.cursor.fetchall()
+            
+            self.cursor.execute(query_arrear, (year, opposite_semester, exam_type))
+            rows.extend(self.cursor.fetchall())
+            
+        else:
+            # For INTERNAL exams, only include current semester (no arrears)
+            query = '''
+            SELECT subject_id, subject_code, subject_name, department, 
+                   year, semester_type, subject_type, exam_type, student_count,
+                   'REGULAR' as subject_track
+            FROM subjects
+            WHERE year = ? AND semester_type = ? AND (exam_type = ? OR exam_type = 'BOTH')
+            '''
+            
+            self.cursor.execute(query, (year, semester_type, exam_type))
+            rows = self.cursor.fetchall()
         
         subjects = []
         for row in rows:
@@ -85,8 +123,17 @@ class ExamScheduler:
                 'semester_type': row[5],
                 'subject_type': row[6],
                 'exam_type': row[7],
-                'student_count': row[8]
+                'student_count': row[8],
+                'subject_track': row[9]  # 'REGULAR' or 'ARREAR'
             })
+        
+        # Sort: Regular subjects first, then by subject_type, department, subject_code
+        subjects.sort(key=lambda x: (
+            0 if x['subject_track'] == 'REGULAR' else 1,  # Regular first
+            0 if x['subject_type'] == 'THEORY' else 1,  # Theory before Lab
+            x['department'],
+            x['subject_code']
+        ))
         
         return subjects
     
@@ -159,11 +206,16 @@ class ExamScheduler:
     def schedule_semester_exams(self, year: int, semester_type: str, start_date: str, end_date: str,
                                holidays: List[str]) -> Tuple[List[Dict], List[Dict]]:
         """
-        Schedule semester exams for given year and semester type
+        Schedule semester exams - simple alternating approach
+        
+        SIMPLE LOGIC:
+        - Alternates between ODD and EVEN semester subjects
+        - Pattern: ODD1, EVEN1, ODD2, EVEN2, ODD3, EVEN3...
+        - Fills available dates sequentially until subjects run out
         
         Args:
             year: Year group
-            semester_type: 'ODD' or 'EVEN'
+            semester_type: 'ODD' or 'EVEN' (which semester to start with)
             start_date: Start date (DD.MM.YYYY)
             end_date: End date (DD.MM.YYYY)
             holidays: List of holiday dates
@@ -177,155 +229,110 @@ class ExamScheduler:
         if not available_dates:
             raise ValueError("No available dates for scheduling!")
         
-        # Get subjects
-        subjects = self.get_subjects_for_year(year, 'SEMESTER', semester_type)
+        # Get subjects for BOTH semesters (ODD and EVEN)
+        odd_subjects = self.get_subjects_for_year(year, 'SEMESTER', 'ODD')
+        even_subjects = self.get_subjects_for_year(year, 'SEMESTER', 'EVEN')
         
-        if not subjects:
-            raise ValueError(f"No semester subjects found for year {year}")
+        # Group by department
+        odd_by_dept = {}
+        even_by_dept = {}
         
-        # For SEMESTER exams, count subjects per department and take the maximum
-        # (department with most subjects determines the number of slots needed)
-        dept_subject_count = {}
-        for subject in subjects:
+        for subject in odd_subjects:
             dept = subject['department']
-            if dept not in dept_subject_count:
-                dept_subject_count[dept] = []
-            dept_subject_count[dept].append(subject)
+            if dept not in odd_by_dept:
+                odd_by_dept[dept] = []
+            odd_by_dept[dept].append(subject)
         
-        # Find department with maximum subjects
-        max_subjects_dept = max(dept_subject_count.keys(), key=lambda d: len(dept_subject_count[d]))
-        subjects_to_schedule = len(dept_subject_count[max_subjects_dept])
+        for subject in even_subjects:
+            dept = subject['department']
+            if dept not in even_by_dept:
+                even_by_dept[dept] = []
+            even_by_dept[dept].append(subject)
         
-        # Use the department with most subjects as reference for scheduling
-        reference_subjects = dept_subject_count[max_subjects_dept]
+        # Find max subjects per department
+        max_odd = max(len(subjs) for subjs in odd_by_dept.values()) if odd_by_dept else 0
+        max_even = max(len(subjs) for subjs in even_by_dept.values()) if even_by_dept else 0
         
-        # Calculate total slots needed
-        total_slots = len(available_dates) * 2  # FN + AN per day
-        
-        print(f"\n📊 Scheduling Analysis:")
+        print(f"\n📊 Simple Alternating Schedule:")
+        print(f"   ODD subjects: {len(odd_subjects)} total, max {max_odd} per dept")
+        print(f"   EVEN subjects: {len(even_subjects)} total, max {max_even} per dept")
         print(f"   Available dates: {len(available_dates)}")
-        print(f"   Total slots: {total_slots}")
-        print(f"   Subjects to schedule: {subjects_to_schedule} (max from {max_subjects_dept})")
-        print(f"   Total subject entries (all depts): {len(subjects)}")
+        print(f"   Starting with: {semester_type} semester")
         
-        if subjects_to_schedule > total_slots:
-            print(f"   WARNING: Not enough slots! Need to extend date range.")
-        
-        # Initialize schedule and tracking
+        # Initialize schedule
         schedule = []
         violations = []
-        dept_last_exam = {}  # Track last exam per department
-        dept_date_usage = {}  # Track which dates are used per department (entire day)
-        slot_usage = set()  # Track which slots are used globally
+        date_index = 0
+        session = 'FN'  # Use same session throughout
         
-        # For SEM exams, distribute subjects across all available days to give students study time
-        # Strategy: Schedule one subject per day, rotating through departments
-        # Use FN session primarily, AN session only if needed
+        # Determine which semester to start with
+        if semester_type == 'ODD':
+            primary_subjects = odd_by_dept
+            secondary_subjects = even_by_dept
+            max_primary = max_odd
+            max_secondary = max_even
+            primary_sem = 'ODD'
+            secondary_sem = 'EVEN'
+        else:
+            primary_subjects = even_by_dept
+            secondary_subjects = odd_by_dept
+            max_primary = max_even
+            max_secondary = max_odd
+            primary_sem = 'EVEN'
+            secondary_sem = 'ODD'
         
-        # Collect all subjects from all departments
-        all_subjects = []
-        for dept in dept_subject_count.keys():
-            all_subjects.extend(dept_subject_count[dept])
+        # Alternate between primary and secondary
+        round_num = 0
+        max_rounds = max(max_primary, max_secondary)
         
-        # Calculate how to distribute subjects across available dates
-        total_subjects = len(all_subjects)
-        total_dates = len(available_dates)
-        
-        # Try to use only one session per day initially (FN preferred)
-        # If subjects > dates, use both sessions
-        subjects_per_day = 1
-        if total_subjects > total_dates:
-            subjects_per_day = 2  # Use both FN and AN sessions
-        
-        # Create slots based on calculated distribution
-        slots = []
-        for date in available_dates:
-            slots.append({'date': date, 'session': 'FN'})
-            if subjects_per_day == 2:
-                slots.append({'date': date, 'session': 'AN'})
-        
-        # Track scheduling progress
-        subjects_scheduled_per_dept = {dept: 0 for dept in dept_subject_count.keys()}
-        slot_index = 0
-        
-        # Schedule subjects one by one across slots
-        for slot in slots:
-            if slot_index >= total_subjects:
-                break  # All subjects scheduled
-            
-            slot_key = f"{slot['date']}_{slot['session']}"
-            
-            # Find next department that needs scheduling
-            dept_to_schedule = None
-            subject_to_schedule = None
-            
-            # Round-robin through departments to ensure fair distribution
-            for dept in dept_subject_count.keys():
-                if subjects_scheduled_per_dept[dept] < len(dept_subject_count[dept]):
-                    # Check if this date is already used for this department
-                    date_key = f"{dept}_{slot['date']}"
-                    if date_key not in dept_date_usage:
-                        dept_to_schedule = dept
-                        subject_to_schedule = dept_subject_count[dept][subjects_scheduled_per_dept[dept]]
-                        break
-            
-            # If no department found (all have conflicts on this date), try to force schedule
-            if not dept_to_schedule:
-                # Find any department that still has subjects
-                for dept in dept_subject_count.keys():
-                    if subjects_scheduled_per_dept[dept] < len(dept_subject_count[dept]):
-                        dept_to_schedule = dept
-                        subject_to_schedule = dept_subject_count[dept][subjects_scheduled_per_dept[dept]]
-                        
-                        # Log violation for using same date
-                        violations.append({
-                            'subject_id': subject_to_schedule['subject_id'],
-                            'subject_code': subject_to_schedule['subject_code'],
-                            'violation_type': 'DATE_REUSE',
-                            'description': f'Multiple exams on same day for {dept}',
-                            'severity': 'MEDIUM'
+        while round_num < max_rounds and date_index < len(available_dates):
+            # Schedule primary semester (e.g., ODD1, ODD2, ODD3...)
+            if round_num < max_primary and date_index < len(available_dates):
+                exam_date = available_dates[date_index]
+                
+                for dept, subjs in sorted(primary_subjects.items()):
+                    if round_num < len(subjs):
+                        subject = subjs[round_num]
+                        schedule.append({
+                            'subject_id': subject['subject_id'],
+                            'subject_code': subject['subject_code'],
+                            'subject_name': subject['subject_name'],
+                            'department': dept,
+                            'date': exam_date,
+                            'session': session,
+                            'subject_type': subject['subject_type'],
+                            'student_count': subject['student_count'],
+                            'semester_type': primary_sem
                         })
-                        break
+                
+                date_index += 1
             
-            if dept_to_schedule and subject_to_schedule:
-                # Validate gap constraints
-                last_exam = dept_last_exam.get(dept_to_schedule)
-                is_valid, msg = self.validate_gap_constraint(
-                    last_exam, slot['date'], slot['session']
-                )
+            # Schedule secondary semester (e.g., EVEN1, EVEN2, EVEN3...)
+            if round_num < max_secondary and date_index < len(available_dates):
+                exam_date = available_dates[date_index]
                 
-                if not is_valid:
-                    violations.append({
-                        'subject_id': subject_to_schedule['subject_id'],
-                        'subject_code': subject_to_schedule['subject_code'],
-                        'violation_type': 'GAP_CONSTRAINT',
-                        'description': msg,
-                        'severity': 'MEDIUM'
-                    })
+                for dept, subjs in sorted(secondary_subjects.items()):
+                    if round_num < len(subjs):
+                        subject = subjs[round_num]
+                        schedule.append({
+                            'subject_id': subject['subject_id'],
+                            'subject_code': subject['subject_code'],
+                            'subject_name': subject['subject_name'],
+                            'department': dept,
+                            'date': exam_date,
+                            'session': session,
+                            'subject_type': subject['subject_type'],
+                            'student_count': subject['student_count'],
+                            'semester_type': secondary_sem
+                        })
                 
-                # Schedule the subject
-                date_key = f"{dept_to_schedule}_{slot['date']}"
-                dept_date_usage[date_key] = subject_to_schedule['subject_id']
-                
-                schedule.append({
-                    'subject_id': subject_to_schedule['subject_id'],
-                    'subject_code': subject_to_schedule['subject_code'],
-                    'subject_name': subject_to_schedule['subject_name'],
-                    'department': dept_to_schedule,
-                    'date': slot['date'],
-                    'session': slot['session'],
-                    'subject_type': subject_to_schedule['subject_type'],
-                    'student_count': subject_to_schedule['student_count']
-                })
-                
-                # Update tracking
-                dept_last_exam[dept_to_schedule] = {
-                    'date': slot['date'],
-                    'session': slot['session'],
-                    'subject_type': subject_to_schedule['subject_type']
-                }
-                subjects_scheduled_per_dept[dept_to_schedule] += 1
-                slot_index += 1
+                date_index += 1
+            
+            round_num += 1
+        
+        print(f"\n✅ Scheduled {len(schedule)} exams using {date_index} dates")
+        print(f"   {primary_sem} exams: {len([s for s in schedule if s.get('semester_type') == primary_sem])}")
+        print(f"   {secondary_sem} exams: {len([s for s in schedule if s.get('semester_type') == secondary_sem])}")
         
         return schedule, violations
     
