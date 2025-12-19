@@ -42,8 +42,8 @@ class ExamScheduler:
         current = start
         
         while current <= end:
-            # Skip weekends (Saturday=5, Sunday=6)
-            if current.weekday() not in config.WEEKENDS:
+            # Skip only Sunday (weekday 6) - Saturday is working day
+            if current.weekday() != 6:
                 # Skip holidays
                 if current not in holiday_dates:
                     available_dates.append(current.strftime('%d.%m.%Y'))
@@ -218,114 +218,114 @@ class ExamScheduler:
         dept_date_usage = {}  # Track which dates are used per department (entire day)
         slot_usage = set()  # Track which slots are used globally
         
-        # Create slots
+        # For SEM exams, distribute subjects across all available days to give students study time
+        # Strategy: Schedule one subject per day, rotating through departments
+        # Use FN session primarily, AN session only if needed
+        
+        # Collect all subjects from all departments
+        all_subjects = []
+        for dept in dept_subject_count.keys():
+            all_subjects.extend(dept_subject_count[dept])
+        
+        # Calculate how to distribute subjects across available dates
+        total_subjects = len(all_subjects)
+        total_dates = len(available_dates)
+        
+        # Try to use only one session per day initially (FN preferred)
+        # If subjects > dates, use both sessions
+        subjects_per_day = 1
+        if total_subjects > total_dates:
+            subjects_per_day = 2  # Use both FN and AN sessions
+        
+        # Create slots based on calculated distribution
         slots = []
         for date in available_dates:
             slots.append({'date': date, 'session': 'FN'})
-            slots.append({'date': date, 'session': 'AN'})
+            if subjects_per_day == 2:
+                slots.append({'date': date, 'session': 'AN'})
         
-        # For SEM exams, schedule slot by slot, allocating one subject per department per slot
-        # All departments take their respective subjects at the same time
-        slot_index = 0
+        # Track scheduling progress
         subjects_scheduled_per_dept = {dept: 0 for dept in dept_subject_count.keys()}
+        slot_index = 0
         
+        # Schedule subjects one by one across slots
         for slot in slots:
+            if slot_index >= total_subjects:
+                break  # All subjects scheduled
+            
             slot_key = f"{slot['date']}_{slot['session']}"
             
-            # For this slot, schedule the next subject for each department
-            has_violations = False
-            violation_details = []
-            subjects_in_this_slot = []
+            # Find next department that needs scheduling
+            dept_to_schedule = None
+            subject_to_schedule = None
             
+            # Round-robin through departments to ensure fair distribution
             for dept in dept_subject_count.keys():
-                # Check if this department has more subjects to schedule
-                if subjects_scheduled_per_dept[dept] >= len(dept_subject_count[dept]):
-                    continue  # This department is done
-                
-                # Get the next subject for this department
-                subject = dept_subject_count[dept][subjects_scheduled_per_dept[dept]]
-                date_key = f"{dept}_{slot['date']}"
-                
-                # Check if this date already used for this department (block entire day)
-                if date_key in dept_date_usage:
-                    continue
-                
-                # Validate gap constraints for this department
-                last_exam = dept_last_exam.get(dept)
+                if subjects_scheduled_per_dept[dept] < len(dept_subject_count[dept]):
+                    # Check if this date is already used for this department
+                    date_key = f"{dept}_{slot['date']}"
+                    if date_key not in dept_date_usage:
+                        dept_to_schedule = dept
+                        subject_to_schedule = dept_subject_count[dept][subjects_scheduled_per_dept[dept]]
+                        break
+            
+            # If no department found (all have conflicts on this date), try to force schedule
+            if not dept_to_schedule:
+                # Find any department that still has subjects
+                for dept in dept_subject_count.keys():
+                    if subjects_scheduled_per_dept[dept] < len(dept_subject_count[dept]):
+                        dept_to_schedule = dept
+                        subject_to_schedule = dept_subject_count[dept][subjects_scheduled_per_dept[dept]]
+                        
+                        # Log violation for using same date
+                        violations.append({
+                            'subject_id': subject_to_schedule['subject_id'],
+                            'subject_code': subject_to_schedule['subject_code'],
+                            'violation_type': 'DATE_REUSE',
+                            'description': f'Multiple exams on same day for {dept}',
+                            'severity': 'MEDIUM'
+                        })
+                        break
+            
+            if dept_to_schedule and subject_to_schedule:
+                # Validate gap constraints
+                last_exam = dept_last_exam.get(dept_to_schedule)
                 is_valid, msg = self.validate_gap_constraint(
                     last_exam, slot['date'], slot['session']
                 )
                 
                 if not is_valid:
-                    has_violations = True
-                    violation_details.append({
-                        'dept': dept,
-                        'subject': subject,
-                        'message': msg
+                    violations.append({
+                        'subject_id': subject_to_schedule['subject_id'],
+                        'subject_code': subject_to_schedule['subject_code'],
+                        'violation_type': 'GAP_CONSTRAINT',
+                        'description': msg,
+                        'severity': 'MEDIUM'
                     })
                 
-                # Add subject to this slot
-                subjects_in_this_slot.append(subject)
-                subjects_scheduled_per_dept[dept] += 1
-            
-            # If no subjects scheduled in this slot, we're done or need to force schedule
-            if not subjects_in_this_slot:
-                # Check if all departments are done
-                all_done = all(
-                    subjects_scheduled_per_dept[dept] >= len(dept_subject_count[dept])
-                    for dept in dept_subject_count.keys()
-                )
-                if all_done:
-                    break  # All subjects scheduled
-                else:
-                    # Force schedule remaining subjects
-                    for dept in dept_subject_count.keys():
-                        if subjects_scheduled_per_dept[dept] < len(dept_subject_count[dept]):
-                            subject = dept_subject_count[dept][subjects_scheduled_per_dept[dept]]
-                            subjects_in_this_slot.append(subject)
-                            subjects_scheduled_per_dept[dept] += 1
-                            has_violations = True
-                            violation_details.append({
-                                'dept': dept,
-                                'subject': subject,
-                                'message': f'CRITICAL: Forced allocation - date already used for {dept}'
-                            })
-            
-            # Schedule all subjects in this slot
-            for subject in subjects_in_this_slot:
-                dept = subject['department']
-                date_key = f"{dept}_{slot['date']}"
-                dept_date_usage[date_key] = subject['subject_id']
+                # Schedule the subject
+                date_key = f"{dept_to_schedule}_{slot['date']}"
+                dept_date_usage[date_key] = subject_to_schedule['subject_id']
                 
                 schedule.append({
-                    'subject_id': subject['subject_id'],
-                    'subject_code': subject['subject_code'],
-                    'subject_name': subject['subject_name'],
-                    'department': dept,
+                    'subject_id': subject_to_schedule['subject_id'],
+                    'subject_code': subject_to_schedule['subject_code'],
+                    'subject_name': subject_to_schedule['subject_name'],
+                    'department': dept_to_schedule,
                     'date': slot['date'],
                     'session': slot['session'],
-                    'subject_type': subject['subject_type'],
-                    'student_count': subject['student_count']
+                    'subject_type': subject_to_schedule['subject_type'],
+                    'student_count': subject_to_schedule['student_count']
                 })
                 
-                # Update last exam for department
-                dept_last_exam[dept] = {
+                # Update tracking
+                dept_last_exam[dept_to_schedule] = {
                     'date': slot['date'],
                     'session': slot['session'],
-                    'subject_type': subject['subject_type']
+                    'subject_type': subject_to_schedule['subject_type']
                 }
-            
-            # Log violations if any
-            if has_violations and violation_details:
-                for violation in violation_details:
-                    subject = violation['subject']
-                    violations.append({
-                        'subject_id': subject['subject_id'],
-                        'subject_code': subject['subject_code'],
-                        'violation_type': 'GAP_CONSTRAINT',
-                        'description': violation['message'],
-                        'severity': 'MEDIUM' if 'CRITICAL' not in violation['message'] else 'CRITICAL'
-                    })
+                subjects_scheduled_per_dept[dept_to_schedule] += 1
+                slot_index += 1
         
         return schedule, violations
     
