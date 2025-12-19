@@ -209,7 +209,7 @@ class ExamScheduler:
         print(f"   Total subject entries (all depts): {len(subjects)}")
         
         if subjects_to_schedule > total_slots:
-            print(f"   ⚠️  WARNING: Not enough slots! Need to extend date range.")
+            print(f"   WARNING: Not enough slots! Need to extend date range.")
         
         # Initialize schedule and tracking
         schedule = []
@@ -461,17 +461,16 @@ class ExamScheduler:
         # Insert schedule
         for item in schedule:
             self.cursor.execute('''
-            INSERT INTO exam_schedule 
-            (exam_cycle_id, subject_id, department, exam_date, session, student_count)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ''', (cycle_id, item['subject_id'], item['department'], 
-                  item['date'], item['session'], item['student_count']))
+            INSERT INTO schedules 
+            (cycle_id, subject_id, exam_date, session)
+            VALUES (?, ?, ?, ?)
+            ''', (cycle_id, item['subject_id'], item['date'], item['session']))
         
         # Insert violations
         for violation in violations:
             self.cursor.execute('''
             INSERT INTO schedule_violations
-            (exam_cycle_id, subject_id, violation_type, description, severity)
+            (cycle_id, subject_id, violation_type, description, severity)
             VALUES (?, ?, ?, ?, ?)
             ''', (cycle_id, violation['subject_id'], violation['violation_type'],
                   violation['description'], violation['severity']))

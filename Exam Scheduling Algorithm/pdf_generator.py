@@ -35,7 +35,7 @@ class SchedulePDFGenerator:
             textColor=colors.black,
             spaceAfter=2,
             alignment=TA_CENTER,
-            fontName='Helvetica-Bold'
+            fontName='Times-Bold'
         )
         
         self.subtitle_style = ParagraphStyle(
@@ -45,7 +45,7 @@ class SchedulePDFGenerator:
             textColor=colors.black,
             spaceAfter=2,
             alignment=TA_CENTER,
-            fontName='Helvetica'
+            fontName='Times-Roman'
         )
         
         self.highlight_style = ParagraphStyle(
@@ -56,7 +56,7 @@ class SchedulePDFGenerator:
             spaceAfter=6,
             spaceBefore=2,
             alignment=TA_CENTER,
-            fontName='Helvetica-Bold',
+            fontName='Times-Bold',
             backColor=colors.yellow
         )
         
@@ -68,7 +68,7 @@ class SchedulePDFGenerator:
             spaceAfter=6,
             spaceBefore=10,
             alignment=TA_LEFT,
-            fontName='Helvetica-Bold'
+            fontName='Times-Bold'
         )
     
     def add_institutional_header(self, exam_type, year, start_date, end_date):

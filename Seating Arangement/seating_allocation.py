@@ -12,6 +12,7 @@ import pandas as pd
 import numpy as np
 import random
 import os
+import sqlite3
 from datetime import datetime
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
@@ -28,25 +29,37 @@ try:
 except ImportError:
     PatternFill = Font = Border = Side = Alignment = get_column_letter = None
 
+# Database path - shared with exam scheduling
+DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'Exam Scheduling Algorithm', 'exam_scheduling.db')
+
 
 class SeatingAllocationSystem:
-    def __init__(self, halls_file, students_file, teachers_file, session='FN', exam_type='Internal', year=1, internal_number=1, selected_halls=None, selected_teachers=None):
-        """Initialize the seating allocation system"""
-        # Read halls data with columns information
-        self.halls_df = pd.read_csv(halls_file)
-        self.halls_df.columns = self.halls_df.columns.str.strip()
+    def __init__(self, halls_file=None, students_file=None, teachers_file=None, session='FN', exam_type='Internal', year=1, internal_number=1, selected_halls=None, selected_teachers=None, use_database=True):
+        """Initialize the seating allocation system
         
-        # Read students data - preserve register numbers as strings
-        self.students_df = pd.read_csv(students_file, dtype={'Register Number': str})
-        self.students_df.columns = self.students_df.columns.str.strip()
-        
-        # Read teachers data
-        self.teachers_df = pd.read_csv(teachers_file)
-        self.teachers_df.columns = self.teachers_df.columns.str.strip()
-        
-        # Filter halls if specific halls are selected
-        if selected_halls:
-            self.halls_df = self.halls_df[self.halls_df['hallno'].isin(selected_halls)].reset_index(drop=True)
+        Args:
+            use_database: If True, load data from database. If False, load from CSV files.
+        """
+        if use_database:
+            # Load data from database
+            self._load_from_database(year, selected_halls, selected_teachers)
+        else:
+            # Load data from CSV files (legacy mode)
+            # Read halls data with columns information
+            self.halls_df = pd.read_csv(halls_file)
+            self.halls_df.columns = self.halls_df.columns.str.strip()
+            
+            # Read students data - preserve register numbers as strings
+            self.students_df = pd.read_csv(students_file, dtype={'Register Number': str})
+            self.students_df.columns = self.students_df.columns.str.strip()
+            
+            # Read teachers data
+            self.teachers_df = pd.read_csv(teachers_file)
+            self.teachers_df.columns = self.teachers_df.columns.str.strip()
+            
+            # Filter halls if specific halls are selected
+            if selected_halls:
+                self.halls_df = self.halls_df[self.halls_df['hallno'].isin(selected_halls)].reset_index(drop=True)
         
         # Filter teachers if specific teachers are selected
         if selected_teachers:
@@ -61,6 +74,39 @@ class SeatingAllocationSystem:
         self.year = year  # Academic year (1, 2, 3, or 4)
         self.internal_number = internal_number  # 1 or 2 (only for Internal exams)
         self.generation_date = datetime.now().strftime('%Y-%m-%d')
+    
+    def _load_from_database(self, year, selected_halls=None, selected_teachers=None):
+        """Load data from shared database"""
+        conn = sqlite3.connect(DB_PATH)
+        
+        # Load halls data
+        halls_query = "SELECT hall_name as hallno, capacity, columns FROM halls WHERE active = 1"
+        self.halls_df = pd.read_sql_query(halls_query, conn)
+        
+        # Filter halls if selected
+        if selected_halls:
+            self.halls_df = self.halls_df[self.halls_df['hallno'].isin(selected_halls)].reset_index(drop=True)
+        
+        # Load students data for specified year
+        students_query = '''
+            SELECT reg_no as "Register Number", 
+                   name as "Name", 
+                   department as "Department"
+            FROM students 
+            WHERE year = ? AND active = 1
+            ORDER BY department, reg_no
+        '''
+        self.students_df = pd.read_sql_query(students_query, conn, params=(year,))
+        
+        # Load teachers data
+        teachers_query = "SELECT teacher_name as Name, department as Department FROM teachers WHERE active = 1"
+        self.teachers_df = pd.read_sql_query(teachers_query, conn)
+        
+        # Filter teachers if selected
+        if selected_teachers:
+            self.teachers_df = self.teachers_df[self.teachers_df['Name'].isin(selected_teachers)].reset_index(drop=True)
+        
+        conn.close()
         
     def optimize_hall_selection(self):
         """
@@ -192,7 +238,7 @@ class SeatingAllocationSystem:
             
             # Move to next hall if current is full
             if current_seat_in_hall > hall_capacity:
-                Halposition += 1
+                current_hall_position += 1
                 current_seat_in_hall = 1
                 current_hall_depts = set()
                 hall_start_idx = len(allocations)
@@ -463,7 +509,7 @@ class SeatingAllocationSystem:
     def convert_to_2d_layout(self, hall_no):
         """Convert student list to 2D grid layout using hall-specific columns"""
         # Get the number of columns for this specific hall
-        num_cols = self.halls_df[self.halls_df['hallno'] == hall_no]['Columns'].values[0]
+        num_cols = self.halls_df[self.halls_df['hallno'] == hall_no]['columns'].values[0]
             
         hall_data = self.hall_wise_allocations[hall_no]
         hall_capacity = self.halls_df[self.halls_df['hallno'] == hall_no]['capacity'].values[0]
@@ -577,13 +623,13 @@ class SeatingAllocationSystem:
             for row_idx, row in enumerate(layout):
                 table_data.append(row)
         else:
-            # Internal Exam: Vertical split cells (left | right)
+            # Internal Exam: Horizontal format (regno1 | regno2)
             table_data = [col_headers]
             for row_idx, row in enumerate(layout):
                 row_data = []
                 for cell in row:
                     if isinstance(cell, dict):
-                        # Format as "Left | Right" with vertical separator
+                        # Format as "regno1 | regno2" horizontally on same line
                         left = cell.get('left', '-')
                         right = cell.get('right', '-')
                         cell_text = f"{left} | {right}"
@@ -599,8 +645,8 @@ class SeatingAllocationSystem:
         # Style the table
         table.auto_set_font_size(False)
         if self.exam_type == 'Internal':
-            table.set_fontsize(6)  # Smaller font for two students per cell
-            table.scale(1, 2.0)  # Standard height for split cells
+            table.set_fontsize(7)  # Font size for readability
+            table.scale(1, 1.8)  # Adjusted height for single-line horizontal format
         else:
             table.set_fontsize(9)
             table.scale(1, 2)
@@ -676,7 +722,7 @@ class SeatingAllocationSystem:
                 pdf.savefig(fig, bbox_inches='tight')
                 plt.close(fig)
         
-        print(f"\n✓ Student PDF generated: {output_file}")
+        print(f"\nStudent PDF generated: {output_file}")
         return output_file
     
     def generate_faculty_pdf(self, output_file=None):
@@ -820,7 +866,7 @@ class SeatingAllocationSystem:
         # Build PDF
         doc.build(elements)
         
-        print(f"\n✓ Faculty PDF generated: {output_file}")
+        print(f"\nFaculty PDF generated: {output_file}")
         return output_file
     
     def generate_excel_report(self, output_file='seating_allocation_report.xlsx'):
@@ -865,8 +911,8 @@ class SeatingAllocationSystem:
         # Now format the Excel file
         self._format_excel(output_file)
         
-        print(f"\n✓ Excel report generated: {output_file}")
-        print(f"✓ Total sheets created: {3 + len(self.hall_wise_allocations)}")
+        print(f"\nExcel report generated: {output_file}")
+        print(f"Total sheets created: {3 + len(self.hall_wise_allocations)}")
         
         return output_file
     
@@ -951,14 +997,14 @@ class SeatingAllocationSystem:
             count = dept_stats.loc[dept, ('Register Number', 'count')]
             hall_min = dept_stats.loc[dept, ('Hall No', 'min')]
             hall_max = dept_stats.loc[dept, ('Hall No', 'max')]
-            print(f"  {dept:8s}: {count:3d} students (Halls {hall_min:2d} to {hall_max:2d})")
+            print(f"  {dept:8s}: {count:3d} students (Halls {hall_min} to {hall_max})")
         
         print("\nHall utilization:")
         for hall_no in sorted(self.allocations['Hall No'].unique()):
             hall_capacity = self.halls_df[self.halls_df['hallno'] == hall_no]['capacity'].values[0]
             allocated = len(self.allocations[self.allocations['Hall No'] == hall_no])
             utilization = (allocated / hall_capacity) * 100
-            print(f"  Hall {hall_no:2d}: {allocated:2d}/{hall_capacity:2d} seats ({utilization:5.1f}% utilized)")
+            print(f"  {hall_no}: {allocated:2d}/{hall_capacity:2d} seats ({utilization:5.1f}% utilized)")
 
 
 def manage_faculty_selection(teachers_df):
@@ -985,19 +1031,19 @@ def manage_faculty_selection(teachers_df):
         if choice == '1':
             print("\nAvailable Faculty:")
             for i, teacher in enumerate(available_teachers, 1):
-                status = "✓ SELECTED" if teacher in selected_teachers else "Available"
+                status = "[SELECTED]" if teacher in selected_teachers else "Available"
                 print(f"  [{i}] {teacher:<30} ({status})")
         
         elif choice == '2':
             print("\nSelect Faculty (comma-separated numbers or 'all'):")
             for i, teacher in enumerate(available_teachers, 1):
-                status = "✓" if teacher in selected_teachers else " "
+                status = "[X]" if teacher in selected_teachers else "[ ]"
                 print(f"  [{i}] [{status}] {teacher}")
             
             selection = input("\nEnter selection: ").strip().lower()
             if selection == 'all':
                 selected_teachers = available_teachers.copy()
-                print(f"✓ Selected all {len(selected_teachers)} faculty members")
+                print(f"Selected all {len(selected_teachers)} faculty members")
             else:
                 try:
                     indices = [int(x.strip()) - 1 for x in selection.split(',')]
@@ -1006,7 +1052,7 @@ def manage_faculty_selection(teachers_df):
                             teacher = available_teachers[idx]
                             if teacher not in selected_teachers:
                                 selected_teachers.append(teacher)
-                    print(f"✓ Total selected: {len(selected_teachers)} faculty")
+                    print(f"Total selected: {len(selected_teachers)} faculty")
                 except:
                     print("Invalid input!")
         
@@ -1015,7 +1061,7 @@ def manage_faculty_selection(teachers_df):
             if name:
                 available_teachers.append(name)
                 selected_teachers.append(name)
-                print(f"✓ Added and selected: {name}")
+                print(f"Added and selected: {name}")
         
         elif choice == '4':
             if not selected_teachers:
@@ -1028,7 +1074,7 @@ def manage_faculty_selection(teachers_df):
                 idx = int(input("\nEnter number to remove (0 to cancel): ").strip()) - 1
                 if 0 <= idx < len(selected_teachers):
                     removed = selected_teachers.pop(idx)
-                    print(f"✓ Removed: {removed}")
+                    print(f"Removed: {removed}")
             except:
                 print("Invalid input!")
         
@@ -1039,7 +1085,7 @@ def manage_faculty_selection(teachers_df):
                 if confirm == 'y':
                     break
             else:
-                print(f"\n✓ {len(selected_teachers)} faculty members selected")
+                print(f"\n{len(selected_teachers)} faculty members selected")
                 break
         else:
             print("Invalid choice!")
@@ -1066,7 +1112,7 @@ def manage_faculty_selection(teachers_df):
             internal_number = int(internal_input)
         else:
             internal_number = 1
-        print(f"✓ Selected: Internal {internal_number} (Morning session)")
+        print(f"Selected: Internal {internal_number} (Morning session)")
     else:
         # Get session only for SEM exams
         session = input("\nEnter session (FN/AN) [default: FN]: ").strip().upper()
@@ -1149,59 +1195,136 @@ def manage_hall_selection(halls_df, total_students, exam_type):
                 hall_no = hall['hallno']
                 cap = int(hall['capacity'])
                 eff_cap = int(hall['effective_capacity'])
-                status = "✓ SELECTED" if hall_no in selected_halls else "Available"
+                status = "[SELECTED]" if hall_no in selected_halls else "Available"
                 print(f"{hall_no:<6} {cap:<10} {cap:<10} {eff_cap:<12} {status:<15}")
         
         elif choice == '2':
-            print("\nSelect Halls (comma-separated hall numbers):")
+            print("\nSelect Halls (comma-separated hall numbers or names):")
             hall_input = input("Hall numbers: ").strip()
             try:
-                hall_nums = [int(x.strip()) for x in hall_input.split(',')]
-                for hall_no in hall_nums:
-                    if hall_no in halls_df['hallno'].values and hall_no not in selected_halls:
-                        selected_halls.append(hall_no)
-                        cap = int(halls_df[halls_df['hallno'] == hall_no]['effective_capacity'].values[0])
+                # Support both "1,2,3" and "Hall 1, Hall 2, Hall 3" formats
+                hall_inputs = [x.strip() for x in hall_input.split(',')]
+                for hall_input_item in hall_inputs:
+                    # Try to match as integer (convert to "Hall X" format)
+                    try:
+                        hall_num = int(hall_input_item)
+                        hall_name = f"Hall {hall_num}"
+                    except ValueError:
+                        # Use as-is if not a number
+                        hall_name = hall_input_item
+                    
+                    if hall_name in halls_df['hallno'].values and hall_name not in selected_halls:
+                        selected_halls.append(hall_name)
+                        cap = int(halls_df[halls_df['hallno'] == hall_name]['effective_capacity'].values[0])
                         accumulated_capacity += cap
-                        print(f"✓ Added Hall {hall_no} (capacity: {cap})")
+                        print(f"Added {hall_name} (capacity: {cap})")
+                    elif hall_name in selected_halls:
+                        print(f"WARNING: {hall_name} already selected")
+                    else:
+                        print(f"WARNING: {hall_name} not found")
                 
                 print(f"\nTotal capacity now: {accumulated_capacity}/{total_students}")
                 if accumulated_capacity >= total_students:
-                    print("✓ Sufficient capacity achieved!")
-            except:
-                print("Invalid input!")
+                    print("Sufficient capacity achieved!")
+            except Exception as e:
+                print(f"Invalid input! Error: {e}")
         
         elif choice == '3':
-            # Auto-select halls to minimize waste
-            halls_sorted = halls_df.sort_values('effective_capacity').reset_index(drop=True)
-            selected_halls = []
-            accumulated_capacity = 0
+            # Auto-select halls to minimize waste using optimized algorithm
+            if selected_halls:
+                print(f"\nWarning: You already have {len(selected_halls)} halls selected (capacity: {accumulated_capacity})")
+                confirm = input("Replace with auto-selection? (y/n): ").strip().lower()
+                if confirm != 'y':
+                    print("Keeping existing selection.")
+                    continue
             
+            print("\nOptimizing hall selection...")
+            
+            # Sort halls by capacity (largest first for better packing)
+            halls_sorted = halls_df.sort_values('effective_capacity', ascending=False).reset_index(drop=True)
+            
+            best_selection = None
+            best_waste = float('inf')
+            best_count = float('inf')
+            
+            # Try greedy approach with largest halls first
+            selection1 = []
+            capacity1 = 0
             for _, hall in halls_sorted.iterrows():
-                if accumulated_capacity >= total_students:
+                if capacity1 >= total_students:
                     break
-                hall_no = hall['hallno']
-                selected_halls.append(hall_no)
-                accumulated_capacity += int(hall['effective_capacity'])
+                selection1.append(hall['hallno'])
+                capacity1 += int(hall['effective_capacity'])
             
-            print(f"✓ Auto-selected {len(selected_halls)} halls")
-            print(f"  Total capacity: {accumulated_capacity}")
-            print(f"  Halls: {', '.join(map(str, selected_halls))}")
+            waste1 = capacity1 - total_students
+            if waste1 >= 0 and (len(selection1) < best_count or (len(selection1) == best_count and waste1 < best_waste)):
+                best_selection = selection1
+                best_waste = waste1
+                best_count = len(selection1)
+            
+            # Try greedy approach with smallest halls first
+            halls_sorted_asc = halls_df.sort_values('effective_capacity', ascending=True).reset_index(drop=True)
+            selection2 = []
+            capacity2 = 0
+            for _, hall in halls_sorted_asc.iterrows():
+                if capacity2 >= total_students:
+                    break
+                selection2.append(hall['hallno'])
+                capacity2 += int(hall['effective_capacity'])
+            
+            waste2 = capacity2 - total_students
+            if waste2 >= 0 and (len(selection2) < best_count or (len(selection2) == best_count and waste2 < best_waste)):
+                best_selection = selection2
+                best_waste = waste2
+                best_count = len(selection2)
+            
+            # Try to find better combination by removing and replacing halls
+            if best_selection:
+                temp_selection = best_selection.copy()
+                temp_capacity = sum(int(halls_df[halls_df['hallno'] == h]['effective_capacity'].values[0]) for h in temp_selection)
+                
+                # Try removing largest hall and adding smaller ones if it reduces waste
+                for hall_to_remove in temp_selection:
+                    hall_cap = int(halls_df[halls_df['hallno'] == hall_to_remove]['effective_capacity'].values[0])
+                    new_capacity = temp_capacity - hall_cap
+                    
+                    if new_capacity >= total_students:
+                        new_selection = [h for h in temp_selection if h != hall_to_remove]
+                        new_waste = new_capacity - total_students
+                        if len(new_selection) < best_count or (len(new_selection) == best_count and new_waste < best_waste):
+                            best_selection = new_selection
+                            best_waste = new_waste
+                            best_count = len(new_selection)
+                            temp_selection = new_selection
+                            temp_capacity = new_capacity
+            
+            # Update the actual selections
+            if best_selection:
+                selected_halls = best_selection
+                accumulated_capacity = sum(int(halls_df[halls_df['hallno'] == h]['effective_capacity'].values[0]) for h in selected_halls)
+                
+                print(f"Optimized selection: {len(selected_halls)} halls")
+                print(f"  Total capacity: {accumulated_capacity}")
+                print(f"  Waste: {accumulated_capacity - total_students} seats ({((accumulated_capacity - total_students) / total_students * 100):.1f}%)")
+                print(f"  Halls: {', '.join(map(str, selected_halls))}")
+            else:
+                print("ERROR: Could not find optimal selection")
         
         elif choice == '4':
             if not selected_halls:
                 print("No halls selected yet!")
                 continue
             print("\nSelected Halls:")
-            for i, hall_no in enumerate(selected_halls, 1):
-                cap = int(halls_df[halls_df['hallno'] == hall_no]['effective_capacity'].values[0])
-                print(f"  [{i}] Hall {hall_no} (capacity: {cap})")
+            for i, hall_name in enumerate(selected_halls, 1):
+                cap = int(halls_df[halls_df['hallno'] == hall_name]['effective_capacity'].values[0])
+                print(f"  [{i}] {hall_name} (capacity: {cap})")
             try:
                 idx = int(input("\nEnter number to remove (0 to cancel): ").strip()) - 1
                 if 0 <= idx < len(selected_halls):
                     removed_hall = selected_halls.pop(idx)
                     cap = int(halls_df[halls_df['hallno'] == removed_hall]['effective_capacity'].values[0])
                     accumulated_capacity -= cap
-                    print(f"✓ Removed Hall {removed_hall}")
+                    print(f"Removed {removed_hall}")
                     print(f"  New capacity: {accumulated_capacity}")
             except:
                 print("Invalid input!")
@@ -1213,7 +1336,7 @@ def manage_hall_selection(halls_df, total_students, exam_type):
                 confirm = input("Continue anyway? (y/n): ").strip().lower()
                 if confirm != 'y':
                     continue
-            print(f"\n✓ {len(selected_halls)} halls selected (capacity: {accumulated_capacity})")
+            print(f"\n{len(selected_halls)} halls selected (capacity: {accumulated_capacity})")
             break
         else:
             print("Invalid choice!")
@@ -1228,10 +1351,13 @@ def main():
     print("Academic Year 2024-25")
     print("=" * 60)
     
-    # File paths
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    halls_file = os.path.join(script_dir, 'halls.csv')
-    teachers_file = os.path.join(script_dir, 'Teachers.csv')
+    # Check if database exists
+    if not os.path.exists(DB_PATH):
+        print(f"\nERROR: Database not found!")
+        print(f"Expected location: {DB_PATH}")
+        print(f"\nPlease run: python integrated_db_setup.py")
+        print(f"from the 'Exam Scheduling Algorithm' folder first.")
+        return
     
     # Get year selection from user
     print("\nSelect Year:")
@@ -1246,16 +1372,8 @@ def main():
     else:
         year = 1
     
-    # Load appropriate student file based on year
-    students_file = os.path.join(script_dir, f'year{year}.csv')
-    
-    if not os.path.exists(students_file):
-        print(f"\nError: Student file '{students_file}' not found!")
-        print("Please ensure the file exists and try again.")
-        return
-    
     year_names = {1: "First", 2: "Second", 3: "Third", 4: "Fourth"}
-    print(f"\n✓ Loaded {year_names[year]} Year students from {os.path.basename(students_file)}")
+    print(f"\n✓ Loading {year_names[year]} Year students from database")
     
     # Get exam type from user
     print("\nExam Types:")
@@ -1277,23 +1395,24 @@ def main():
             internal_number = int(internal_input)
         else:
             internal_number = 1
-        print(f"✓ Selected: Internal {internal_number} (Morning session)")
+        print(f"Selected: Internal {internal_number} (Morning session)")
     else:
         # Get session only for SEM exams
         session = input("\nEnter session (FN/AN) [default: FN]: ").strip().upper()
         if session not in ['FN', 'AN']:
             session = 'FN'
     
-    # Load data for interactive management
-    halls_df = pd.read_csv(halls_file)
-    halls_df.columns = halls_df.columns.str.strip()
-    teachers_df = pd.read_csv(teachers_file)
-    teachers_df.columns = teachers_df.columns.str.strip()
+    # Load data from database for interactive management
+    conn = sqlite3.connect(DB_PATH)
     
-    # Load students to get total count
-    students_df = pd.read_csv(students_file)
-    students_df.columns = students_df.columns.str.strip()
-    total_students = len(students_df)
+    halls_df = pd.read_sql_query("SELECT hall_name as hallno, capacity, columns FROM halls WHERE active = 1", conn)
+    teachers_df = pd.read_sql_query("SELECT teacher_name as Name, department as Department FROM teachers WHERE active = 1", conn)
+    
+    # Get student count for the selected year
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM students WHERE year = ? AND active = 1", (year,))
+    total_students = cursor.fetchone()[0]
+    conn.close()
     
     # Interactive Hall Selection FIRST (need to know how many halls before selecting faculty)
     print("\n" + "=" * 60)
@@ -1310,12 +1429,16 @@ def main():
     print(f"Minimum faculty required: {len(selected_halls)}")
     selected_teachers = manage_faculty_selection(teachers_df)
     
-    # Create allocation system with selected teachers and halls
-    system = SeatingAllocationSystem(halls_file, students_file, teachers_file, 
-                                     session=session, exam_type=exam_type, year=year, 
-                                     internal_number=internal_number,
-                                     selected_halls=selected_halls,
-                                     selected_teachers=selected_teachers)
+    # Create allocation system using database (not CSV files)
+    system = SeatingAllocationSystem(
+        use_database=True,
+        session=session, 
+        exam_type=exam_type, 
+        year=year, 
+        internal_number=internal_number,
+        selected_halls=selected_halls,
+        selected_teachers=selected_teachers
+    )
     
     # Final confirmation before generating allocation
     print("\n" + "=" * 60)

@@ -148,7 +148,7 @@ def print_schedule_list_format(schedule, exam_type):
 def print_violations_table(violations):
     """Print violations in table format"""
     if not violations:
-        print("   ✅ No constraint violations!")
+        print("   No constraint violations!")
         return
     
     print("\n" + "-"*70)
@@ -236,7 +236,7 @@ def modify_schedule_interactive(schedule, exam_type, available_dates):
                         if 0 <= date_idx < len(available_dates):
                             new_date = available_dates[date_idx]
                             schedule[exam_idx]['date'] = new_date
-                            print(f"   ✓ Date changed to {new_date}")
+                            print(f"   Date changed to {new_date}")
                         else:
                             print("   Invalid date number!")
                     except ValueError:
@@ -253,7 +253,7 @@ def modify_schedule_interactive(schedule, exam_type, available_dates):
                 
                 if session_choice in sessions:
                     schedule[exam_idx]['session'] = session_choice
-                    print(f"   ✓ Session changed to {session_choice}")
+                    print(f"   Session changed to {session_choice}")
                 elif session_choice:
                     print("   Invalid session!")
                 
@@ -327,10 +327,25 @@ def get_user_input():
     # Date range
     print("\n4. Enter Exam Period:")
     
+    today = datetime.now().date()
+    one_year_later = datetime(today.year + 1, today.month, today.day).date()
+    
     while True:
         start_date = input("   Start Date (DD.MM.YYYY): ").strip()
         try:
-            datetime.strptime(start_date, '%d.%m.%Y')
+            start_dt = datetime.strptime(start_date, '%d.%m.%Y')
+            start_dt_date = start_dt.date()
+            
+            # Check if start date is in the past
+            if start_dt_date < today:
+                print(f"   Error: Start date cannot be in the past. Today is {today.strftime('%d.%m.%Y')}")
+                continue
+            
+            # Check if start date is more than 1 year in the future
+            if start_dt_date > one_year_later:
+                print(f"   Error: Start date cannot be more than 1 year from today ({one_year_later.strftime('%d.%m.%Y')})") 
+                continue
+            
             break
         except ValueError:
             print("   Invalid format. Please use DD.MM.YYYY")
@@ -340,10 +355,31 @@ def get_user_input():
         try:
             end_dt = datetime.strptime(end_date, '%d.%m.%Y')
             start_dt = datetime.strptime(start_date, '%d.%m.%Y')
-            if end_dt >= start_dt:
-                break
-            else:
-                print("   End date must be after start date.")
+            end_dt_date = end_dt.date()
+            start_dt_date = start_dt.date()
+            
+            # Check if end date is same as start date
+            if end_dt_date == start_dt_date:
+                print("   Error: End date cannot be the same as start date.")
+                continue
+            
+            # Check if end date is before start date
+            if end_dt_date < start_dt_date:
+                print("   Error: End date must be after start date.")
+                continue
+            
+            # Check if schedule duration exceeds 1 year
+            duration_days = (end_dt_date - start_dt_date).days
+            if duration_days > 365:
+                print(f"   Error: Schedule duration cannot exceed 1 year (365 days). Current: {duration_days} days")
+                continue
+            
+            # Check if end date is more than 1 year from today
+            if end_dt_date > one_year_later:
+                print(f"   Error: End date cannot be more than 1 year from today ({one_year_later.strftime('%d.%m.%Y')})") 
+                continue
+            
+            break
         except ValueError:
             print("   Invalid format. Please use DD.MM.YYYY")
     
@@ -418,7 +454,7 @@ def main():
         
         if violations:
             print_header("CONSTRAINT VIOLATIONS")
-            print(f"\n   ⚠️  {len(violations)} constraint violation(s) detected:")
+            print(f"\n   WARNING: {len(violations)} constraint violation(s) detected:")
             print_violations_table(violations)
             print("\n   Note: These violations occur due to insufficient time slots.")
             print("   Consider extending the exam period if possible.")
@@ -430,15 +466,15 @@ def main():
             override_choice = input("\n   Do you want to proceed with this schedule despite violations? (y/n): ").strip().lower()
             
             if override_choice != 'y':
-                print("\n   ❌ Schedule creation cancelled due to constraint violations.")
+                print("\n   Schedule creation cancelled due to constraint violations.")
                 print("   Please adjust the date range or exam parameters and try again.")
                 scheduler.close()
                 return
             else:
-                print("\n   ⚠️  COE Override: Proceeding with schedule despite violations...")
-                print("   ⚠️  Warning: This schedule violates defined constraints!")
+                print("\n   COE Override: Proceeding with schedule despite violations...")
+                print("   Warning: This schedule violates defined constraints!")
         else:
-            print("\n   ✅ All constraints satisfied!")
+            print("\n   All constraints satisfied!")
         
         # Summary by department
         print_header("DEPARTMENT-WISE SUMMARY")
@@ -479,7 +515,7 @@ def main():
         scheduler.save_schedule_to_db(cycle_id, schedule, violations)
         
         print("\n" + "="*70)
-        print(f"   ✅ Schedule saved to database (Cycle ID: {cycle_id})")
+        print(f"   Schedule saved to database (Cycle ID: {cycle_id})")
         print("="*70)
         
         # Generate PDF
@@ -490,15 +526,15 @@ def main():
                 start_date, end_date
             )
             abs_path = os.path.abspath(pdf_path)
-            print(f"   ✅ PDF generated: {abs_path}")
+            print(f"   PDF generated: {abs_path}")
         except Exception as pdf_error:
-            print(f"   ⚠️  PDF generation failed: {pdf_error}")
+            print(f"   WARNING: PDF generation failed: {pdf_error}")
             print("   Schedule is still saved in database.")
         
     except ValueError as e:
-        print(f"\n   ❌ Error: {e}")
+        print(f"\n   Error: {e}")
     except Exception as e:
-        print(f"\n   ❌ Unexpected error: {e}")
+        print(f"\n   Unexpected error: {e}")
         import traceback
         traceback.print_exc()
     finally:
