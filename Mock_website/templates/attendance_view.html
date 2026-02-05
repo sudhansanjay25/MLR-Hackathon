@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Attendance View</title>
+</head>
+<body>
+    <h1>Attendance - {{ cycle.exam_type }}</h1>
+    <p><a href="/coe/dashboard">← Back</a></p>
+    
+    <h2>Exam Cycle: {{ cycle.academic_year }} | Year {{ cycle.year }} | Semester {{ cycle.semester }}</h2>
+    
+    {% for schedule_id, data in attendance_data.items() %}
+    <hr>
+    <h3>{{ data.schedule.subject_code }} - {{ data.schedule.subject_name }}</h3>
+    <p><b>Date:</b> {{ data.schedule.date.strftime('%d-%m-%Y') }} | <b>Session:</b> {{ data.schedule.session }} | <b>Dept:</b> {{ data.schedule.department }}</p>
+    
+    <table border="1" cellpadding="5">
+        <tr>
+            <td style="vertical-align:top;width:50%">
+                <h4 style="color:green">Present ({{ data.present|length }})</h4>
+                <ul>
+                {% for s in data.present %}
+                    <li>{{ s.regno }} - {{ s.name }}</li>
+                {% endfor %}
+                {% if not data.present %}<li>None</li>{% endif %}
+                </ul>
+            </td>
+            <td style="vertical-align:top;width:50%">
+                <h4 style="color:red">Absent ({{ data.absent|length }})</h4>
+                <ul>
+                {% for s in data.absent %}
+                    <li>{{ s.regno }} - {{ s.name }}</li>
+                {% endfor %}
+                {% if not data.absent %}<li>None</li>{% endif %}
+                </ul>
+            </td>
+        </tr>
+    </table>
+    {% endfor %}
+</body>
+</html>

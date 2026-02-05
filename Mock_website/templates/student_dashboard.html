@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Student Dashboard</title>
+</head>
+<body>
+    <h1>Student Dashboard</h1>
+    <p>Welcome, {{ student.name }} | <a href="/logout">Logout</a></p>
+    
+    <hr>
+    <h2>Your Details</h2>
+    <table border="1" cellpadding="5">
+        <tr><td><b>Register Number</b></td><td>{{ student.regno }}</td></tr>
+        <tr><td><b>Name</b></td><td>{{ student.name }}</td></tr>
+        <tr><td><b>Department</b></td><td>{{ student.department }}</td></tr>
+        <tr><td><b>Year</b></td><td>{{ student.year }}</td></tr>
+    </table>
+    
+    <hr>
+    <h2>Your Exam Schedules</h2>
+    
+    {% if schedules %}
+        {% for sg in schedules %}
+        <h3>{{ sg.cycle.exam_type }} - {{ sg.cycle.academic_year }}</h3>
+        <p><b>Year:</b> {{ sg.cycle.year }} | <b>Semester:</b> {{ sg.cycle.semester }}</p>
+        
+        <table border="1" cellpadding="5">
+            <tr><th>Date</th><th>Session</th><th>Subject Code</th><th>Subject Name</th></tr>
+            {% for exam in sg.exams %}
+            <tr>
+                <td>{{ exam.date.strftime('%d-%m-%Y') }}</td>
+                <td>{{ exam.session }}</td>
+                <td>{{ exam.subject_code }}</td>
+                <td>{{ exam.subject_name }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+        
+        {% if hall_ticket_enabled and sg.cycle.exam_type == 'Semester' %}
+        <p><a href="/hallticket/generate/{{ sg.cycle._id }}"><button>Download Hall Ticket</button></a></p>
+        {% elif sg.cycle.exam_type == 'Semester' %}
+        <p><em>Hall ticket not authorized yet</em></p>
+        {% else %}
+        <p><em>No hall tickets for Internal exams</em></p>
+        {% endif %}
+        <hr>
+        {% endfor %}
+    {% else %}
+        <p>No exam schedules found.</p>
+    {% endif %}
+</body>
+</html>

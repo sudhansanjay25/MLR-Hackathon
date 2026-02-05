@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QR Scanner - Faculty</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/dashboard.css">
+</head>
+
+<body>
+    <div class="dashboard-container">
+        <nav class="sidebar">
+            <div class="sidebar-header">
+                <h2>Faculty Panel</h2>
+                <p>{{ user.name }}</p>
+            </div>
+            <ul class="sidebar-menu">
+                <li><a href="/faculty/dashboard">Dashboard</a></li>
+                <li><a href="/faculty/assigned-exams">Assigned Exams</a></li>
+                <li class="active"><a href="/faculty/scan-qr">QR Scanner</a></li>
+                <li><a href="/faculty/attendance-records">Attendance Records</a></li>
+            </ul>
+        </nav>
+
+        <main class="main-content">
+            <header class="dashboard-header">
+                <h1>QR Scanner (Mock)</h1>
+            </header>
+
+            <div class="content-card">
+                <div class="scanner-box">
+                    <p>Simulate scanning by entering the Student Register Number found on the QR Code.</p>
+
+                    <form action="/faculty/scan-qr" method="POST" class="scan-form">
+                        <div class="form-group">
+                            <label>Register Number</label>
+                            <input type="text" name="reg_no" placeholder="e.g. 71402205001" required autofocus>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Simulate Scan</button>
+                    </form>
+                </div>
+
+                {% if result %}
+                <div class="scan-result {{ 'success' if result.success else 'error' }}">
+                    {% if result.success %}
+                    <h3>✅ Present Marked</h3>
+                    <div class="student-details">
+                        <p><strong>Name:</strong> {{ result.student.name }}</p>
+                        <p><strong>Reg No:</strong> {{ result.student.register_number }}</p>
+                        <p><strong>Exam:</strong> {{ result.exam.subject_name }} ({{ result.exam.subject_code }})</p>
+                    </div>
+                    {% else %}
+                    <h3>❌ Error</h3>
+                    <p>{{ result.message }}</p>
+                    {% endif %}
+                </div>
+                {% endif %}
+            </div>
+        </main>
+    </div>
+</body>
+
+</html>

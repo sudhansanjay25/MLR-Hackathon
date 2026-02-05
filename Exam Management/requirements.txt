@@ -1,0 +1,9 @@
+flask
+pymongo
+pandas
+matplotlib
+reportlab
+qrcode
+openpyxl
+jinja2
+python-dotenv

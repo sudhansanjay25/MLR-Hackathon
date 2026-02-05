@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>View Schedules - COE</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/dashboard.css">
+</head>
+
+<body>
+    <div class="dashboard-container">
+        <nav class="sidebar">
+            <div class="sidebar-header">
+                <h2>COE Panel</h2>
+                <p>{{ user.name }}</p>
+            </div>
+            <ul class="sidebar-menu">
+                <li><a href="/coe/dashboard">Dashboard</a></li>
+                <li><a href="/coe/schedule-exam">Create Exam Schedule</a></li>
+                <li class="active"><a href="/coe/view-schedules">View Schedules</a></li>
+                <li><a href="/coe/authorize-halltickets">Authorize Hall Tickets</a></li>
+                <li><a href="/coe/manage-attendance">Manage Attendance</a></li>
+            </ul>
+        </nav>
+
+        <main class="main-content">
+            <header class="dashboard-header">
+                <h1>Exam Schedules</h1>
+            </header>
+
+            <div class="content-card">
+                {% if sessions %}
+                {% for sess_key, exams in sessions.items() %}
+                <div class="session-group">
+                    <div class="session-header">
+                        <h3>{{ exams[0].date }} - {{ exams[0].session }}</h3>
+                        <div class="actions">
+                            <form action="/coe/generate-seating" method="POST" style="display:inline;">
+                                <input type="hidden" name="date" value="{{ exams[0].date }}">
+                                <input type="hidden" name="session" value="{{ exams[0].session }}">
+                                <button type="submit" class="btn btn-sm btn-primary">Generate Seating</button>
+                            </form>
+                            <a href="/coe/download-seating/{{ exams[0].date }}/{{ exams[0].session }}"
+                                class="btn btn-sm btn-secondary">Download PDF</a>
+                        </div>
+                    </div>
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Sub Code</th>
+                                <th>Subject Name</th>
+                                <th>Year/Sem</th>
+                                <th>Dept</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for exam in exams %}
+                            <tr>
+                                <td>{{ exam.subject_code }}</td>
+                                <td>{{ exam.subject_name }}</td>
+                                <td>{{ exam.year }}/{{ exam.semester }}</td>
+                                <td>{{ exam.department }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                <hr>
+                {% endfor %}
+                {% else %}
+                <p class="placeholder">No schedules found. Create one first.</p>
+                {% endif %}
+
+                {% if message %}
+                <div class="alert alert-info">{{ message }}</div>
+                {% endif %}
+            </div>
+        </main>
+    </div>
+</body>
+
+</html>

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Verification Result</title>
+</head>
+<body>
+    <h1>Student Verification</h1>
+    
+    {% if success %}
+    <div style="background:#d4edda;padding:20px;border:1px solid green;">
+        <h2 style="color:green;">✓ ATTENDANCE MARKED - PRESENT</h2>
+        
+        <h3>Student Details</h3>
+        <table border="1" cellpadding="5">
+            <tr><td><b>Register Number</b></td><td>{{ student.regno }}</td></tr>
+            <tr><td><b>Name</b></td><td>{{ student.name }}</td></tr>
+            <tr><td><b>Department</b></td><td>{{ student.department }}</td></tr>
+            <tr><td><b>Year</b></td><td>{{ student.year }}</td></tr>
+        </table>
+        
+        <h3>Exam Details</h3>
+        <table border="1" cellpadding="5">
+            <tr><td><b>Subject</b></td><td>{{ exam.subject_code }} - {{ exam.subject_name }}</td></tr>
+            <tr><td><b>Date</b></td><td>{{ exam.date.strftime('%d-%m-%Y') }}</td></tr>
+            <tr><td><b>Session</b></td><td>{{ exam.session }}</td></tr>
+        </table>
+        
+        {% if seating %}
+        <h3>Seating</h3>
+        <table border="1" cellpadding="5">
+            <tr><td><b>Hall</b></td><td>{{ seating.hall_id }}</td></tr>
+            <tr><td><b>Bench</b></td><td>{{ seating.bench }}</td></tr>
+        </table>
+        {% endif %}
+        
+        <p><b>Marked at:</b> {{ marked_at.strftime('%d-%m-%Y %H:%M:%S') }}</p>
+    </div>
+    {% else %}
+    <div style="background:#f8d7da;padding:20px;border:1px solid red;">
+        <h2 style="color:red;">✗ VERIFICATION FAILED</h2>
+        <p><b>Error:</b> {{ error }}</p>
+    </div>
+    {% endif %}
+    
+    <hr>
+    <p><a href="/faculty/qr_scan">← Back to Scanner</a></p>
+</body>
+</html>

@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>View Schedule</title>
+</head>
+<body>
+    <h1>Exam Schedule Details</h1>
+    <p><a href="/coe/dashboard">← Back</a></p>
+    
+    <h2>Exam Cycle Info</h2>
+    <table border="1" cellpadding="5">
+        <tr><td><b>Academic Year</b></td><td>{{ cycle.academic_year }}</td></tr>
+        <tr><td><b>Exam Type</b></td><td>{{ cycle.exam_type }}</td></tr>
+        <tr><td><b>Year</b></td><td>{{ cycle.year }}</td></tr>
+        <tr><td><b>Semester</b></td><td>{{ cycle.semester }}</td></tr>
+        <tr><td><b>Start Date</b></td><td>{{ cycle.start_date.strftime('%d-%m-%Y') }}</td></tr>
+        <tr><td><b>End Date</b></td><td>{{ cycle.end_date.strftime('%d-%m-%Y') }}</td></tr>
+    </table>
+    
+    <hr>
+    <h2>Exam Schedule</h2>
+    {% if schedules %}
+    <table border="1" cellpadding="5">
+        <tr><th>Date</th><th>Session</th><th>Dept</th><th>Code</th><th>Subject</th><th>Type</th></tr>
+        {% for s in schedules %}
+        <tr>
+            <td>{{ s.date.strftime('%d-%m-%Y') }}</td>
+            <td>{{ s.session }}</td>
+            <td>{{ s.department }}</td>
+            <td>{{ s.subject_code }}</td>
+            <td>{{ s.subject_name }}</td>
+            <td>{{ s.subject_type }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+    {% else %}
+    <p>No schedules.</p>
+    {% endif %}
+    
+    <hr>
+    <h2>Seating Arrangements</h2>
+    {% if seating %}
+    <table border="1" cellpadding="5">
+        <tr><th>Date</th><th>Session</th><th>Hall</th><th>Invigilator</th><th>Students</th><th>Depts</th></tr>
+        {% for s in seating %}
+        <tr>
+            <td>{{ s.date.strftime('%d-%m-%Y') }}</td>
+            <td>{{ s.session }}</td>
+            <td>{{ s.hall_id }}</td>
+            <td>{{ s.invigilator_id }}</td>
+            <td>{{ s.student_count }}</td>
+            <td>{{ s.departments_present|join(', ') }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+    {% else %}
+    <p>No seating.</p>
+    {% endif %}
+    
+    <hr>
+    <h2>Download Seating PDFs</h2>
+    {% if cycle.seating_pdf_paths %}
+    <table border="1" cellpadding="5">
+        <tr><th>Date</th><th>Session</th><th>Hall</th><th>Download</th></tr>
+        {% for p in cycle.seating_pdf_paths %}
+        <tr>
+            <td>{{ p.date }}</td>
+            <td>{{ p.session }}</td>
+            <td>{{ p.hall_id }}</td>
+            <td><a href="/coe/download_seating/{{ cycle._id }}/{{ p.filename }}" target="_blank">View</a></td>
+        </tr>
+        {% endfor %}
+    </table>
+    {% else %}
+    <p>No PDFs.</p>
+    {% endif %}
+</body>
+</html>

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Authorize Hall Tickets - COE</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/dashboard.css">
+</head>
+
+<body>
+    <div class="dashboard-container">
+        <nav class="sidebar">
+            <div class="sidebar-header">
+                <h2>COE Panel</h2>
+                <p>{{ user.name }}</p>
+            </div>
+            <ul class="sidebar-menu">
+                <li><a href="/coe/dashboard">Dashboard</a></li>
+                <li><a href="/coe/schedule-exam">Create Exam Schedule</a></li>
+                <li><a href="/coe/view-schedules">View Schedules</a></li>
+                <li class="active"><a href="/coe/authorize-halltickets">Authorize Hall Tickets</a></li>
+                <li><a href="/coe/manage-attendance">Manage Attendance</a></li>
+            </ul>
+        </nav>
+
+        <main class="main-content">
+            <header class="dashboard-header">
+                <h1>Authorize Hall Tickets</h1>
+            </header>
+
+            <div class="content-card">
+                <div class="status-box {{ 'active' if is_released else 'inactive' }}">
+                    <h3>Current Status: {{ 'Released' if is_released else 'Not Released' }}</h3>
+                    <p>
+                        {% if is_released %}
+                        Students can currently download their hall tickets.
+                        {% else %}
+                        Hall ticket download is disabled for students.
+                        {% endif %}
+                    </p>
+                </div>
+
+                <form action="/coe/authorize-halltickets" method="POST" class="auth-form">
+                    <input type="hidden" name="action" value="{{ 'revoke' if is_released else 'release' }}">
+                    <button type="submit" class="btn {{ 'btn-danger' if is_released else 'btn-success' }}">
+                        {{ 'Revoke Access' if is_released else 'Release Hall Tickets' }}
+                    </button>
+                </form>
+            </div>
+        </main>
+    </div>
+</body>
+
+</html>

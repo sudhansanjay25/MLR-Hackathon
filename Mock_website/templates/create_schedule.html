@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Create Exam Schedule</title>
+    <script>
+        function updateStudentCount() {
+            var year = document.getElementById('year').value;
+            if (year) {
+                fetch('/api/get_student_count?year=' + year)
+                    .then(r => r.json())
+                    .then(data => {
+                        document.getElementById('total_students').innerText = data.count;
+                        document.getElementById('remaining_students').innerText = data.count;
+                        updateRemaining();
+                    });
+            }
+        }
+        function updateRemaining() {
+            var boxes = document.querySelectorAll('input[name="halls"]:checked');
+            var examType = document.querySelector('select[name="exam_type"]').value;
+            var studentsPerBench = (examType === 'Internal 1' || examType === 'Internal 2') ? 2 : 1;
+            var cap = 0;
+            boxes.forEach(function(b) { cap += parseInt(b.dataset.capacity) * studentsPerBench; });
+            var total = parseInt(document.getElementById('total_students').innerText) || 0;
+            var rem = Math.max(0, total - cap);
+            document.getElementById('remaining_students').innerText = rem;
+            document.getElementById('status').innerText = rem == 0 && total > 0 ? '✓ All allocated' : 'Select more halls';
+            document.getElementById('status').style.color = rem == 0 ? 'green' : 'orange';
+        }
+    </script>
+</head>
+<body>
+    <h1>Create Exam Schedule</h1>
+    <p><a href="/coe/dashboard">← Back</a></p>
+    
+    <form method="POST" action="/coe/create_schedule">
+        <h2>Exam Details</h2>
+        <p><label><b>Academic Year:</b></label><br>
+            <select name="academic_year" required>
+                <option value="{{ current_year }}-{{ current_year + 1 }}">{{ current_year }}-{{ current_year + 1 }}</option>
+                <option value="{{ current_year - 1 }}-{{ current_year }}">{{ current_year - 1 }}-{{ current_year }}</option>
+            </select>
+        </p>
+        <p><label><b>Exam Type:</b></label><br>
+            <select name="exam_type" onchange="updateRemaining()" required>
+                <option value="Internal 1">Internal 1</option>
+                <option value="Internal 2">Internal 2</option>
+                <option value="Semester">Semester (End Semester)</option>
+            </select>
+        </p>
+        <p><label><b>Year:</b></label><br>
+            <select name="year" id="year" onchange="updateStudentCount()" required>
+                <option value="">Select Year</option>
+                <option value="1">1st Year</option>
+                <option value="2">2nd Year</option>
+                <option value="3">3rd Year</option>
+                <option value="4">4th Year</option>
+            </select>
+        </p>
+        <p><label><b>Semester Type:</b></label><br>
+            <select name="semester_type" required>
+                <option value="odd">Odd Semester</option>
+                <option value="even">Even Semester</option>
+            </select>
+        </p>
+        <p><label><b>Start Date:</b></label><br><input type="date" name="start_date" required></p>
+        <p><label><b>End Date:</b></label><br><input type="date" name="end_date" required></p>
+        <p><label><b>Holidays (comma-separated YYYY-MM-DD):</b></label><br>
+            <input type="text" name="holidays" placeholder="2025-01-26, 2025-01-15" style="width:400px">
+        </p>
+        
+        <hr>
+        <h2>Faculty Selection</h2>
+        <table border="1" cellpadding="5">
+            <tr><th>Select</th><th>ID</th><th>Name</th><th>Dept</th></tr>
+            {% for f in faculty %}
+            <tr>
+                <td><input type="checkbox" name="faculty" value="{{ f.faculty_id }}"></td>
+                <td>{{ f.faculty_id }}</td>
+                <td>{{ f.name }}</td>
+                <td>{{ f.department }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+        
+        <hr>
+        <h2>Hall Selection</h2>
+        <p><b>Total Students:</b> <span id="total_students">0</span> | 
+           <b>Remaining:</b> <span id="remaining_students">0</span> 
+           <span id="status"></span></p>
+        <table border="1" cellpadding="5">
+            <tr><th>Select</th><th>Hall ID</th><th>Name</th><th>Benches</th><th>Columns</th></tr>
+            {% for h in halls %}
+            <tr>
+                <td><input type="checkbox" name="halls" value="{{ h.hall_id }}" data-capacity="{{ h.bench_capacity }}" onchange="updateRemaining()"></td>
+                <td>{{ h.hall_id }}</td>
+                <td>{{ h.name }}</td>
+                <td>{{ h.bench_capacity }}</td>
+                <td>{{ h.columns }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+        
+        <hr>
+        <p><button type="submit">Create Schedule & Generate Seating</button></p>
+        <p><em>Seating allocation is automatically generated.</em></p>
+    </form>
+</body>
+</html>

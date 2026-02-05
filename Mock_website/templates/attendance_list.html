@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Attendance List</title>
+</head>
+<body>
+    <h1>Attendance Records</h1>
+    <p><a href="/faculty/dashboard">← Back</a></p>
+    
+    {% if cycle %}
+    <h2>{{ cycle.exam_type }} - {{ cycle.academic_year }}</h2>
+    {% endif %}
+    
+    {% if attendance %}
+    <table border="1" cellpadding="5">
+        <tr><th>Reg No</th><th>Subject</th><th>Status</th><th>Marked At</th></tr>
+        {% for a in attendance %}
+        <tr>
+            <td>{{ a.regno }}</td>
+            <td>{{ a.subject_code }}</td>
+            <td style="color:{% if a.status == 'present' %}green{% else %}red{% endif %}">{{ a.status|upper }}</td>
+            <td>{{ a.marked_at.strftime('%d-%m-%Y %H:%M') if a.marked_at else '-' }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+    {% else %}
+    <p>No attendance records.</p>
+    {% endif %}
+</body>
+</html>

@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Login - Exam Management System</title>
+</head>
+<body>
+    <h1>Exam Management System</h1>
+    <h2>Login</h2>
+    
+    {% if error %}
+    <p style="color: red;">{{ error }}</p>
+    {% endif %}
+    
+    <form method="POST" action="/login">
+        <p>
+            <label>Email:</label><br>
+            <input type="email" name="email" required style="width: 300px;">
+        </p>
+        <p>
+            <label>Password:</label><br>
+            <input type="password" name="password" required style="width: 300px;">
+        </p>
+        <p>
+            <button type="submit">Login</button>
+        </p>
+    </form>
+    
+    <hr>
+    <h3>Sample Login Credentials</h3>
+    <table border="1" cellpadding="5">
+        <tr><th>Role</th><th>Email</th><th>Password</th></tr>
+        <tr><td>COE</td><td>coe@exam.com</td><td>password123</td></tr>
+        <tr><td>Faculty</td><td>fac01@mlid.edu</td><td>password123</td></tr>
+        <tr><td>Student (Year 1)</td><td>mlid10125001@student.mlid.edu</td><td>password123</td></tr>
+        <tr><td>Student (Year 2)</td><td>mlid20124001@student.mlid.edu</td><td>password123</td></tr>
+    </table>
+</body>
+</html>

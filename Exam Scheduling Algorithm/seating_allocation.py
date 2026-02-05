@@ -2061,19 +2061,38 @@ def main_sem_exam():
     subject_codes = [sc[0] for sc in scheduled_subjects]
     placeholders = ','.join(['?' for _ in subject_codes])
     
-    # Query: Regular students (enrolled in these subjects)
+    # Check semester types of all scheduled subjects
     cursor.execute(f'''
-        SELECT DISTINCT s.student_id, s.reg_no, s.name, s.department, s.year
-        FROM students s
-        JOIN student_subjects ss ON s.student_id = ss.student_id
-        JOIN subjects sub ON ss.subject_id = sub.subject_id
-        WHERE sub.subject_code IN ({placeholders})
-            AND s.active = 1
-            AND ss.is_arrear = 0
-        ORDER BY s.department, s.reg_no
+        SELECT DISTINCT semester_type
+        FROM subjects 
+        WHERE subject_code IN ({placeholders})
     ''', subject_codes)
+    scheduled_sem_types = [row[0] for row in cursor.fetchall()]
     
-    regular_students = cursor.fetchall()
+    # CRITICAL LOGIC:
+    # If scheduled subjects match selected semester type → Include regular students
+    # If scheduled subjects are opposite semester type → ONLY arrear students
+    
+    regular_students = []
+    
+    # Check if any scheduled subject matches the selected semester type
+    if semester in scheduled_sem_types:
+        # Include current students only for subjects matching their current semester
+        cursor.execute(f'''
+            SELECT DISTINCT s.student_id, s.reg_no, s.name, s.department, s.year
+            FROM students s
+            JOIN student_subjects ss ON s.student_id = ss.student_id
+            JOIN subjects sub ON ss.subject_id = sub.subject_id
+            WHERE sub.subject_code IN ({placeholders})
+                AND s.active = 1
+                AND ss.is_arrear = 0
+                AND s.year = ?
+                AND sub.semester_type = ?
+            ORDER BY s.department, s.reg_no
+        ''', subject_codes + [year, semester])
+        
+        regular_students = cursor.fetchall()
+    # else: All subjects are opposite semester - no regular students
     
     # Query: Arrear students (have arrears in these subjects)
     cursor.execute(f'''
@@ -2106,9 +2125,26 @@ def main_sem_exam():
     
     total_students = len(unique_students)
     
+    # Determine exam type based on scheduled subjects
+    has_matching_semester = semester in scheduled_sem_types
+    has_opposite_semester = any(st != semester for st in scheduled_sem_types)
+    
     print(f"\n✓ Regular students: {len(regular_students)}")
     print(f"✓ Arrear students: {len(arrear_students)}")
     print(f"✓ Total students: {total_students}")
+    
+    if not has_matching_semester and has_opposite_semester:
+        print(f"\n⚠️  ARREAR EXAM ONLY")
+        print(f"    Selected: Year {year}, {semester} semester")
+        print(f"    Subjects are: {', '.join(scheduled_sem_types)} semester")
+        print(f"    → Only students with arrears will appear")
+    elif has_matching_semester and has_opposite_semester:
+        print(f"\n✓ MIXED EXAM")
+        print(f"    Includes both {semester} semester subjects (regular + arrears)")
+        print(f"    and opposite semester subjects (arrears only)")
+    else:
+        print(f"\n✓ REGULAR EXAM")
+        print(f"    Current {semester} semester students + arrear students")
     
     if total_students == 0:
         print("\n❌ No students found for this exam slot")

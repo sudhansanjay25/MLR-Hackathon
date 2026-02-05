@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>COE Dashboard</title>
+</head>
+<body>
+    <h1>Controller of Examinations Dashboard</h1>
+    <p>Welcome | <a href="/logout">Logout</a></p>
+    
+    <hr>
+    <h2>Authorization Controls</h2>
+    <table border="1" cellpadding="10">
+        <tr>
+            <td><b>Hall Ticket Download</b><br>
+                {% if auth and auth.hall_ticket_enabled %}<span style="color:green">ENABLED</span>{% else %}<span style="color:red">DISABLED</span>{% endif %}
+            </td>
+            <td>
+                <form method="POST" action="/coe/toggle_authorization">
+                    <input type="hidden" name="auth_type" value="hall_ticket">
+                    <button type="submit">{% if auth and auth.hall_ticket_enabled %}Disable{% else %}Enable{% endif %}</button>
+                </form>
+            </td>
+        </tr>
+        <tr>
+            <td><b>QR Code Scanning</b><br>
+                {% if auth and auth.qr_scan_enabled %}<span style="color:green">ENABLED</span>{% else %}<span style="color:red">DISABLED</span>{% endif %}
+            </td>
+            <td>
+                <form method="POST" action="/coe/toggle_authorization">
+                    <input type="hidden" name="auth_type" value="qr_scan">
+                    <button type="submit">{% if auth and auth.qr_scan_enabled %}Disable{% else %}Enable{% endif %}</button>
+                </form>
+            </td>
+        </tr>
+    </table>
+    
+    <hr>
+    <h2>Create New Exam Schedule</h2>
+    <p><a href="/coe/create_schedule"><button>Create New Schedule</button></a></p>
+    <p><em>Note: Seating allocation is automatically generated with the schedule.</em></p>
+    
+    <hr>
+    <h2>Existing Exam Schedules</h2>
+    {% if exam_cycles %}
+    <table border="1" cellpadding="5">
+        <tr><th>Academic Year</th><th>Exam Type</th><th>Year</th><th>Semester</th><th>Start</th><th>End</th><th>Status</th><th>Actions</th></tr>
+        {% for c in exam_cycles %}
+        <tr>
+            <td>{{ c.academic_year }}</td>
+            <td>{{ c.exam_type }}</td>
+            <td>{{ c.year }}</td>
+            <td>{{ c.semester }}</td>
+            <td>{{ c.start_date.strftime('%d-%m-%Y') }}</td>
+            <td>{{ c.end_date.strftime('%d-%m-%Y') }}</td>
+            <td>{{ c.status }}</td>
+            <td>
+                <a href="/coe/view_schedule/{{ c._id }}">View</a> |
+                <a href="/coe/view_attendance/{{ c._id }}">Attendance</a>
+            </td>
+        </tr>
+        {% endfor %}
+    </table>
+    {% else %}
+    <p>No schedules created yet.</p>
+    {% endif %}
+    
+    <hr>
+    <h2>Statistics</h2>
+    <table border="1" cellpadding="5">
+        <tr><td><b>Departments</b></td><td>{{ departments|length }}</td></tr>
+        <tr><td><b>Exam Halls</b></td><td>{{ halls|length }}</td></tr>
+        <tr><td><b>Faculty</b></td><td>{{ faculty|length }}</td></tr>
+    </table>
+</body>
+</html>

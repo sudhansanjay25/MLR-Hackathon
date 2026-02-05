@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Hall Ticket</title>
+    <style>
+        body { font-family: Arial; margin: 20px; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid black; padding: 8px; }
+        .qr { text-align: center; margin: 20px; }
+        @media print { button { display: none; } }
+    </style>
+</head>
+<body>
+    <h1>Hall Ticket</h1>
+    <h2>{{ cycle.exam_type }} Examination - {{ cycle.academic_year }}</h2>
+    
+    <button onclick="window.print()">Print Hall Ticket</button>
+    
+    <hr>
+    <h3>Student Details</h3>
+    <table>
+        <tr><td><b>Register Number</b></td><td>{{ student.regno }}</td></tr>
+        <tr><td><b>Name</b></td><td>{{ student.name }}</td></tr>
+        <tr><td><b>Department</b></td><td>{{ student.department }}</td></tr>
+        <tr><td><b>Year</b></td><td>{{ student.year }}</td></tr>
+    </table>
+    
+    <hr>
+    <h3>Exam Schedule</h3>
+    <table>
+        <tr><th>Date</th><th>Session</th><th>Subject Code</th><th>Subject Name</th><th>Hall</th><th>Bench</th></tr>
+        {% for exam in schedules %}
+        {% set key = exam.date.strftime('%Y-%m-%d') + '_' + exam.session %}
+        {% set seat = seating_info.get(key, {}) %}
+        <tr>
+            <td>{{ exam.date.strftime('%d-%m-%Y') }}</td>
+            <td>{{ exam.session }}</td>
+            <td>{{ exam.subject_code }}</td>
+            <td>{{ exam.subject_name }}</td>
+            <td>{{ seat.get('hall_id', '-') }}</td>
+            <td>{{ seat.get('bench', '-') }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+    
+    <div class="qr">
+        <h3>QR Code for Attendance</h3>
+        {% if qr_image %}
+        <img src="{{ qr_image }}" alt="QR Code">
+        {% else %}
+        <p>QR code not available</p>
+        {% endif %}
+        <p><small>Scan this QR code to mark attendance</small></p>
+    </div>
+    
+    <hr>
+    <p><small>This hall ticket is computer generated. Verify the details before the examination.</small></p>
+</body>
+</html>

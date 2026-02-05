@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>QR Scanner</title>
+</head>
+<body>
+    <h1>QR Code Scanner</h1>
+    <p><a href="/faculty/dashboard">← Back</a></p>
+    
+    {% if not enabled %}
+    <p style="color:red;"><b>QR Scanning is NOT authorized by COE</b></p>
+    {% else %}
+    <p style="color:green;"><b>QR Scanning is ENABLED</b></p>
+    
+    <hr>
+    <h2>Manual Entry</h2>
+    <p>Enter student register number and exam cycle to mark attendance:</p>
+    
+    <form action="" method="GET" id="verifyForm">
+        <p>
+            <label>Exam Cycle ID:</label><br>
+            <select id="cycleSelect" required>
+                <option value="">Select Exam Cycle</option>
+                {% for a in assignments %}
+                <option value="{{ a.exam_cycle_id }}">{{ a.date.strftime('%d-%m-%Y') }} - {{ a.session }} - {{ a.hall_id }}</option>
+                {% endfor %}
+            </select>
+        </p>
+        <p>
+            <label>Register Number:</label><br>
+            <input type="text" id="regnoInput" placeholder="e.g., MLID10125001" required>
+        </p>
+        <p>
+            <button type="button" onclick="verifyStudent()">Verify & Mark Attendance</button>
+        </p>
+    </form>
+    
+    <script>
+        function verifyStudent() {
+            var cycle = document.getElementById('cycleSelect').value;
+            var regno = document.getElementById('regnoInput').value;
+            if (cycle && regno) {
+                window.location.href = '/verify/' + cycle + '/' + regno;
+            } else {
+                alert('Please select exam cycle and enter register number');
+            }
+        }
+    </script>
+    
+    <hr>
+    <h2>Your Assigned Halls</h2>
+    {% if assignments %}
+    <table border="1" cellpadding="5">
+        <tr><th>Date</th><th>Session</th><th>Hall</th><th>Students</th></tr>
+        {% for a in assignments %}
+        <tr>
+            <td>{{ a.date.strftime('%d-%m-%Y') }}</td>
+            <td>{{ a.session }}</td>
+            <td>{{ a.hall_id }}</td>
+            <td>{{ a.student_count }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+    {% else %}
+    <p>No assignments.</p>
+    {% endif %}
+    {% endif %}
+</body>
+</html>

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Faculty Dashboard</title>
+</head>
+<body>
+    <h1>Faculty Dashboard</h1>
+    <p>Welcome, {{ faculty.name }} | <a href="/logout">Logout</a></p>
+    
+    <hr>
+    <h2>Your Details</h2>
+    <table border="1" cellpadding="5">
+        <tr><td><b>Faculty ID</b></td><td>{{ faculty.faculty_id }}</td></tr>
+        <tr><td><b>Name</b></td><td>{{ faculty.name }}</td></tr>
+        <tr><td><b>Department</b></td><td>{{ faculty.department }}</td></tr>
+    </table>
+    
+    <hr>
+    <h2>Invigilation Schedule</h2>
+    {% if assignments %}
+    <table border="1" cellpadding="5">
+        <tr><th>Date</th><th>Session</th><th>Hall</th><th>Students</th><th>Departments</th></tr>
+        {% for a in assignments %}
+        <tr>
+            <td>{{ a.date.strftime('%d-%m-%Y') }}</td>
+            <td>{{ a.session }}</td>
+            <td>{{ a.hall_id }}</td>
+            <td>{{ a.student_count }}</td>
+            <td>{{ a.departments_present|join(', ') }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+    {% else %}
+    <p>No assignments.</p>
+    {% endif %}
+    
+    <hr>
+    <h2>QR Code Scanning</h2>
+    {% if qr_scan_enabled %}
+    <p style="color:green;"><b>QR Scanning ENABLED</b></p>
+    <p><a href="/faculty/qr_scan"><button>Open QR Scanner</button></a></p>
+    {% else %}
+    <p style="color:red;"><b>QR Scanning NOT authorized</b></p>
+    {% endif %}
+    
+    <hr>
+    <h2>Attendance Records</h2>
+    {% for a in assignments %}
+        {% if a.exam_cycle_id %}
+        <p><a href="/faculty/attendance/{{ a.exam_cycle_id }}">View Attendance - {{ a.cycle.exam_type if a.cycle else '' }}</a></p>
+        {% endif %}
+    {% endfor %}
+</body>
+</html>
